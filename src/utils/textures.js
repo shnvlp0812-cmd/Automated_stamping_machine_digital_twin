@@ -209,7 +209,7 @@ export function makeAlertTexture() {
     ctx.font = 'bold 180px monospace'; // Much larger text
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('PARTS OVERFLOW - MACHINE STOPPED', c.width / 2, c.height / 2 + 10); // +10 to optically center
+    // Removed text as requested
 
     // Grid overlay for dot-matrix effect (softer, so it doesn't chop the text from afar)
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';

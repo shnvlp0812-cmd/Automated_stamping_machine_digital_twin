@@ -8,6 +8,7 @@ import {
     makeHazardTexture,
     makeAlertTexture
 } from '../utils/textures';
+import { getPanelConfig } from '../utils/panelConfig';
 
 // Disable modern color management to match the legacy r128 appearance where hex colors were treated as linear
 THREE.ColorManagement.enabled = false;
@@ -16,13 +17,20 @@ export default function DecoilerCanvas({
     sliderRPM,
     isPlaying,
     onStatsUpdate,
-    targetCount = 23,
-    safeGuardVisible = true
+    safeGuardVisible = true,
+    selectedModel,
+    emptyTrigger,
+    modelChangeTrigger
 }) {
     const containerRef = useRef(null);
     const speedRef = useRef(sliderRPM);
     const playingRef = useRef(isPlaying);
     const frontGuardRef = useRef(null);
+    const selectedModelRef = useRef(selectedModel);
+    const emptyTriggerRef = useRef(emptyTrigger);
+    const lastEmptyTriggerRef = useRef(0);
+    const modelChangeTriggerRef = useRef(modelChangeTrigger);
+    const lastModelChangeTriggerRef = useRef(0);
 
     useEffect(() => {
         if (frontGuardRef.current) {
@@ -37,6 +45,10 @@ export default function DecoilerCanvas({
     useEffect(() => {
         playingRef.current = isPlaying;
     }, [isPlaying]);
+
+    useEffect(() => { selectedModelRef.current = selectedModel; }, [selectedModel]);
+    useEffect(() => { emptyTriggerRef.current = emptyTrigger; }, [emptyTrigger]);
+    useEffect(() => { modelChangeTriggerRef.current = modelChangeTrigger; }, [modelChangeTrigger]);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -184,7 +196,6 @@ export default function DecoilerCanvas({
 
         const steelMat = new THREE.MeshStandardMaterial({ color: 0x4d5257, metalness: 0.85, roughness: 0.45 });
         const darkSteelMat = new THREE.MeshStandardMaterial({ color: 0x33373b, metalness: 0.75, roughness: 0.55 });
-        const yellowMat = new THREE.MeshStandardMaterial({ color: 0xd7a418, metalness: 0.3, roughness: 0.55 });
 
         /* safety walkway painted in the floor gap between the decoiler skid and the feed-table skid */
         const hazardTex = makeHazardTexture();
@@ -286,7 +297,7 @@ export default function DecoilerCanvas({
         /* Coil Stack Fencing (3 sides) */
         const fenceGroup = new THREE.Group();
         const fenceMat = new THREE.MeshStandardMaterial({ color: 0xd7a418, metalness: 0.2, roughness: 0.5 });
-        
+
         const fLeft = decoilerBaseLeft - 0.2;
         const fRight = decoilerBaseRight + 0.2;
         const fZ = 1.8;
@@ -295,7 +306,7 @@ export default function DecoilerCanvas({
 
         const addFencePost = (x, z) => {
             const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, fH, 12), fenceMat);
-            post.position.set(x, FLOOR_TOP + fH/2, z);
+            post.position.set(x, FLOOR_TOP + fH / 2, z);
             post.castShadow = true;
             fenceGroup.add(post);
         };
@@ -311,13 +322,13 @@ export default function DecoilerCanvas({
             [fBack, fZ].forEach(z => addFencePost(x, z));
             addFencePost(x, 0);
         });
-        addFencePost((fLeft + fRight)/2, fBack);
+        addFencePost((fLeft + fRight) / 2, fBack);
 
         // Rails
         [0.6, 1.2, 1.8, 2.4, 3.0, 3.6].forEach(y => {
-            addFenceRail((fLeft + fRight)/2, fBack, fRight - fLeft, 0.04, y); // Back
-            addFenceRail(fLeft, (fBack + fZ)/2, 0.04, fZ - fBack, y);         // Left
-            addFenceRail(fRight, (fBack + fZ)/2, 0.04, fZ - fBack, y);        // Right
+            addFenceRail((fLeft + fRight) / 2, fBack, fRight - fLeft, 0.04, y); // Back
+            addFenceRail(fLeft, (fBack + fZ) / 2, 0.04, fZ - fBack, y);         // Left
+            addFenceRail(fRight, (fBack + fZ) / 2, 0.04, fZ - fBack, y);        // Right
         });
         scene.add(fenceGroup);
 
@@ -612,7 +623,23 @@ export default function DecoilerCanvas({
             const ctlYellowMat = new THREE.MeshStandardMaterial({ color: 0xd7a418, metalness: 0.3, roughness: 0.55 });
             const bladeMat = new THREE.MeshStandardMaterial({ color: 0xe7eaec, metalness: 0.9, roughness: 0.2 });
             const anvilMat = new THREE.MeshStandardMaterial({ color: 0xb7bcc0, metalness: 0.85, roughness: 0.3 });
-            const pieceMat = new THREE.MeshStandardMaterial({ color: 0xd6dade, metalness: 0.7, roughness: 0.32 });
+            const pieceMat = new THREE.MeshStandardMaterial({ color: 0xd6dade, metalness: 0.7, roughness: 0.32, side: THREE.DoubleSide });
+
+            const frontPanelPieceMat = pieceMat.clone();
+            const fanCanvas = document.createElement('canvas');
+            fanCanvas.width = 512; fanCanvas.height = 512;
+            const ctx = fanCanvas.getContext('2d');
+            ctx.fillStyle = '#ffffff'; // Opaque part
+            ctx.fillRect(0, 0, 512, 512);
+            ctx.beginPath();
+            // Hole off-center (X=0.15 in 3D -> U=0.65 -> U=332) and radius 0.22 -> 112
+            ctx.arc(332, 256, 112, 0, Math.PI * 2);
+            ctx.fillStyle = '#000000'; // Transparent part
+            ctx.fill();
+            const alphaTex = new THREE.CanvasTexture(fanCanvas);
+            frontPanelPieceMat.transparent = true;
+            frontPanelPieceMat.alphaMap = alphaTex;
+            frontPanelPieceMat.alphaTest = 0.5;
 
             const grp = new THREE.Group();
 
@@ -685,10 +712,11 @@ export default function DecoilerCanvas({
             const exitLimitZ = 7.5;
             const pieces = [];
             for (let i = 0; i < 250; i++) {
-                const mesh = new THREE.Mesh(new THREE.BoxGeometry(coilWidth, stripThickness, 1, 24, 1, 24), pieceMat);
+                // Increase resolution to 80x80 so circular fan stamps render smoothly
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(coilWidth, stripThickness, 1, 80, 1, 80), pieceMat);
                 mesh.castShadow = true; mesh.receiveShadow = true;
                 mesh.userData.formBasePositions = mesh.geometry.attributes.position.array.slice();
-                mesh.visible = (i === 0);
+                mesh.visible = false;
                 mesh.scale.z = 0.001;
                 mesh.position.set(0, pieceCenterY, cutZ);
                 grp.add(mesh);
@@ -697,8 +725,8 @@ export default function DecoilerCanvas({
 
             return {
                 grp, blade, bladeHolder, cutZ, stripTopY, stripBottomY,
-                holderTravelTop, holderTravelBottom, pieces, growingIndex: 0,
-                cutLength, pieceCenterY, exitLimitZ
+                holderTravelTop, holderTravelBottom, pieces,
+                cutLength, pieceCenterY, exitLimitZ, pieceMat, frontPanelPieceMat
             };
         }
         const cutToLength = buildCutToLengthMachine();
@@ -840,70 +868,96 @@ export default function DecoilerCanvas({
             lowerDieShoe.castShadow = true; lowerDieShoe.receiveShadow = true;
             grp.add(lowerDieShoe);
 
-            const trayCavityW = lowerDieW - 0.34;
-            const trayCavityD = lowerDieD - 0.46;
-            const trayCavityDepth = 0.055;
-            const trayFloorY = stampingMaterialY - trayCavityDepth;
+            const dieGroupBack = new THREE.Group();
+            const dieGroupFront = new THREE.Group();
+            const dieGroupSide = new THREE.Group();
 
-            const lowerDieBlock = new THREE.Mesh(
-                new THREE.BoxGeometry(lowerDieW - 0.12, stampingDieBlockH, lowerDieD - 0.10),
-                stampingDieMat
-            );
-            lowerDieBlock.position.set(0, stampingLowerDieShoeTopY + stampingDieBlockH / 2, stampingCenterZ);
-            lowerDieBlock.castShadow = true; lowerDieBlock.receiveShadow = true;
-            grp.add(lowerDieBlock);
+            const buildDieCavity = (type) => {
+                const cavityGrp = new THREE.Group();
 
-            const trayFloor = new THREE.Mesh(
-                new THREE.BoxGeometry(trayCavityW, 0.018, trayCavityD),
-                stampingBlackMat
-            );
-            trayFloor.position.set(0, trayFloorY + 0.009, stampingCenterZ);
-            grp.add(trayFloor);
+                let cavW = lowerDieW - 0.34;
+                let cavD = lowerDieD - 0.46;
+                let cavDepth = 0.055;
+                if (type === 'front_panel_ac') {
+                    cavW = lowerDieW - 0.5;
+                    cavD = lowerDieD - 0.2;
+                    cavDepth = 0.085;
+                } else if (type === 'side_panel_ac') {
+                    cavW = lowerDieW - 0.2;
+                    cavD = lowerDieD - 0.7;
+                    cavDepth = 0.045;
+                }
+                const tFloorY = stampingMaterialY - cavDepth;
 
-            const trayLandH = trayCavityDepth;
-            const landW = (lowerDieW - 0.12 - trayCavityW) / 2;
-            const landD = (lowerDieD - 0.10 - trayCavityD) / 2;
+                const lBlock = new THREE.Mesh(
+                    new THREE.BoxGeometry(lowerDieW - 0.12, stampingDieBlockH, lowerDieD - 0.10),
+                    stampingDieMat
+                );
+                lBlock.position.set(0, stampingLowerDieShoeTopY + stampingDieBlockH / 2, stampingCenterZ);
+                lBlock.castShadow = true; lBlock.receiveShadow = true;
+                cavityGrp.add(lBlock);
 
-            const leftLand = new THREE.Mesh(
-                new THREE.BoxGeometry(landW, trayLandH, lowerDieD - 0.10),
-                stampingDieMat
-            );
-            leftLand.position.set(-(trayCavityW / 2 + landW / 2), trayFloorY + trayLandH / 2, stampingCenterZ);
-            leftLand.castShadow = true; leftLand.receiveShadow = true;
-            grp.add(leftLand);
+                const tFloor = new THREE.Mesh(
+                    new THREE.BoxGeometry(cavW, 0.018, cavD),
+                    stampingBlackMat
+                );
+                tFloor.position.set(0, tFloorY + 0.009, stampingCenterZ);
+                cavityGrp.add(tFloor);
 
-            const rightLand = leftLand.clone();
-            rightLand.position.x = -leftLand.position.x;
-            grp.add(rightLand);
+                const tLandH = cavDepth;
+                const landW = (lowerDieW - 0.12 - cavW) / 2;
+                const landD = (lowerDieD - 0.10 - cavD) / 2;
 
-            const frontLand = new THREE.Mesh(
-                new THREE.BoxGeometry(trayCavityW, trayLandH, landD),
-                stampingDieMat
-            );
-            frontLand.position.set(0, trayFloorY + trayLandH / 2, stampingCenterZ - (trayCavityD / 2 + landD / 2));
-            frontLand.castShadow = true; frontLand.receiveShadow = true;
-            grp.add(frontLand);
+                const leftLand = new THREE.Mesh(
+                    new THREE.BoxGeometry(landW, tLandH, lowerDieD - 0.10),
+                    stampingDieMat
+                );
+                leftLand.position.set(-(cavW / 2 + landW / 2), tFloorY + tLandH / 2, stampingCenterZ);
+                leftLand.castShadow = true; leftLand.receiveShadow = true;
+                cavityGrp.add(leftLand);
 
-            const rearLand = frontLand.clone();
-            rearLand.position.z = stampingCenterZ + (trayCavityD / 2 + landD / 2);
-            grp.add(rearLand);
+                const rightLand = leftLand.clone();
+                rightLand.position.x = -leftLand.position.x;
+                cavityGrp.add(rightLand);
 
-            const slopeH = trayCavityDepth;
-            const slopeT = 0.055;
-            const slopeMat = stampingPolishedMat;
-            [
-                { w: trayCavityW, d: slopeT, x: 0, z: stampingCenterZ - trayCavityD / 2 - slopeT / 2 },
-                { w: trayCavityW, d: slopeT, x: 0, z: stampingCenterZ + trayCavityD / 2 + slopeT / 2 },
-                { w: slopeT, d: trayCavityD, x: -trayCavityW / 2 - slopeT / 2, z: stampingCenterZ },
-                { w: slopeT, d: trayCavityD, x: trayCavityW / 2 + slopeT / 2, z: stampingCenterZ }
-            ].forEach(face => {
-                const wall = new THREE.Mesh(new THREE.BoxGeometry(face.w, slopeH, face.d), slopeMat);
-                wall.position.set(face.x, trayFloorY + slopeH / 2, face.z);
-                wall.rotation.z = face.x === 0 ? 0 : (face.x < 0 ? -0.12 : 0.12);
-                wall.rotation.x = face.x === 0 ? (face.z < stampingCenterZ ? -0.12 : 0.12) : 0;
-                wall.castShadow = true;
-                grp.add(wall);
-            });
+                const frontLand = new THREE.Mesh(
+                    new THREE.BoxGeometry(cavW, tLandH, landD),
+                    stampingDieMat
+                );
+                frontLand.position.set(0, tFloorY + tLandH / 2, stampingCenterZ - (cavD / 2 + landD / 2));
+                frontLand.castShadow = true; frontLand.receiveShadow = true;
+                cavityGrp.add(frontLand);
+
+                const rearLand = frontLand.clone();
+                rearLand.position.z = stampingCenterZ + (cavD / 2 + landD / 2);
+                cavityGrp.add(rearLand);
+
+                const slopeH = cavDepth;
+                const slopeT = 0.055;
+                const slopeMat = stampingPolishedMat;
+                [
+                    { w: cavW, d: slopeT, x: 0, z: stampingCenterZ - cavD / 2 - slopeT / 2 },
+                    { w: cavW, d: slopeT, x: 0, z: stampingCenterZ + cavD / 2 + slopeT / 2 },
+                    { w: slopeT, d: cavD, x: -cavW / 2 - slopeT / 2, z: stampingCenterZ },
+                    { w: slopeT, d: cavD, x: cavW / 2 + slopeT / 2, z: stampingCenterZ }
+                ].forEach(face => {
+                    const wall = new THREE.Mesh(new THREE.BoxGeometry(face.w, slopeH, face.d), slopeMat);
+                    wall.position.set(face.x, tFloorY + slopeH / 2, face.z);
+                    wall.rotation.z = face.x === 0 ? 0 : (face.x < 0 ? -0.12 : 0.12);
+                    wall.rotation.x = face.x === 0 ? (face.z < stampingCenterZ ? -0.12 : 0.12) : 0;
+                    wall.castShadow = true;
+                    cavityGrp.add(wall);
+                });
+                return cavityGrp;
+            };
+
+            dieGroupBack.add(buildDieCavity('back_panel'));
+            dieGroupFront.add(buildDieCavity('front_panel_ac'));
+            dieGroupSide.add(buildDieCavity('side_panel_ac'));
+
+            grp.add(dieGroupBack);
+            grp.add(dieGroupFront);
+            grp.add(dieGroupSide);
 
             [-(lowerDieW / 2 + 0.06), (lowerDieW / 2 + 0.06)].forEach(px => {
                 [-(lowerDieD / 2 + 0.05), (lowerDieD / 2 + 0.05)].forEach(pz => {
@@ -983,26 +1037,26 @@ export default function DecoilerCanvas({
             const alertGroup = new THREE.Group();
             alertGroup.position.set(stampingFrameCenterX, (stampingColumnTopY + stampingCrownTopY) / 2, stampingCenterZ);
             const alertTex = makeAlertTexture();
-            
+
             // LED Matrix Material
-            const alertMat = new THREE.MeshStandardMaterial({ 
-                map: alertTex, 
-                emissiveMap: alertTex, 
-                emissive: 0xffffff, 
-                emissiveIntensity: 1.2, 
+            const alertMat = new THREE.MeshStandardMaterial({
+                map: alertTex,
+                emissiveMap: alertTex,
+                emissive: 0xffffff,
+                emissiveIntensity: 1.2,
                 roughness: 0.8,
                 metalness: 0.1
             });
-            
+
             const panelH = 0.28;
             const zOffset = stampingCrownDepth / 2 + 0.02;
             const xOffset = (stampingCrownWidth + stampingRightSideExtension) / 2 + 0.02;
-            
+
             // Front & Back panels
             const fbPanelGeo = new THREE.PlaneGeometry(stampingCrownWidth + stampingRightSideExtension - 0.2, panelH);
             const frontPanel = new THREE.Mesh(fbPanelGeo, alertMat);
             frontPanel.position.set(0, 0, zOffset);
-            
+
             const backPanel = new THREE.Mesh(fbPanelGeo, alertMat);
             backPanel.position.set(0, 0, -zOffset);
             backPanel.rotation.y = Math.PI;
@@ -1012,11 +1066,11 @@ export default function DecoilerCanvas({
             const leftPanel = new THREE.Mesh(lrPanelGeo, alertMat);
             leftPanel.position.set(-xOffset, 0, 0);
             leftPanel.rotation.y = -Math.PI / 2;
-            
+
             const rightPanel = new THREE.Mesh(lrPanelGeo, alertMat);
             rightPanel.position.set(xOffset, 0, 0);
             rightPanel.rotation.y = Math.PI / 2;
-            
+
             alertGroup.add(frontPanel, backPanel, leftPanel, rightPanel);
             alertGroup.visible = false;
             grp.add(alertGroup);
@@ -1209,30 +1263,88 @@ export default function DecoilerCanvas({
             punchBlock.castShadow = true;
             stampingRamGroup.add(punchBlock);
 
-            const punchW = trayCavityW - 0.10;
-            const punchD = trayCavityD - 0.10;
-            const punchH = trayCavityDepth + 0.015;
-            const punchNose = new THREE.Mesh(
-                new THREE.BoxGeometry(punchW, punchH, punchD),
-                stampingPolishedMat
-            );
-            punchNose.position.set(0, punchYOffset - stampingUpperDieBlockH / 2 - punchH / 2, 0);
-            punchNose.castShadow = true;
-            stampingRamGroup.add(punchNose);
+            const punchGroupBack = new THREE.Group();
+            const punchGroupFront = new THREE.Group();
+            const punchGroupSide = new THREE.Group();
 
-            const shoulderY = punchYOffset - stampingUpperDieBlockH / 2 - 0.010;
-            const shoulderT = 0.055;
-            [
-                { w: punchW, d: shoulderT, x: 0, z: -(trayCavityD / 2 + 0.050) },
-                { w: punchW, d: shoulderT, x: 0, z: (trayCavityD / 2 + 0.050) },
-                { w: shoulderT, d: punchD, x: -(trayCavityW / 2 + 0.050), z: 0 },
-                { w: shoulderT, d: punchD, x: (trayCavityW / 2 + 0.050), z: 0 }
-            ].forEach(face => {
-                const shoulder = new THREE.Mesh(new THREE.BoxGeometry(face.w, 0.020, face.d), stampingDieMat);
-                shoulder.position.set(face.x, shoulderY, face.z);
-                shoulder.castShadow = true;
-                stampingRamGroup.add(shoulder);
-            });
+            const buildUpperPunch = (type) => {
+                const punchGrp = new THREE.Group();
+                let cavW = lowerDieW - 0.34;
+                let cavD = lowerDieD - 0.46;
+                let cavDepth = 0.055;
+                if (type === 'front_panel_ac') {
+                    cavW = lowerDieW - 0.5;
+                    cavD = lowerDieD - 0.2;
+                    cavDepth = 0.085;
+                } else if (type === 'side_panel_ac') {
+                    cavW = lowerDieW - 0.2;
+                    cavD = lowerDieD - 0.7;
+                    cavDepth = 0.045;
+                }
+
+                const punchW = cavW - 0.10;
+                const punchD = cavD - 0.10;
+                const punchH = cavDepth + 0.015;
+
+                const punchNose = new THREE.Mesh(
+                    new THREE.BoxGeometry(punchW, punchH, punchD),
+                    stampingPolishedMat
+                );
+                punchNose.position.set(0, punchYOffset - stampingUpperDieBlockH / 2 - punchH / 2, 0);
+                punchNose.castShadow = true;
+                punchGrp.add(punchNose);
+
+                if (type === 'front_panel_ac') {
+                    const punchFeatureGrp = new THREE.Group();
+
+                    const fanPunch = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.1, 32), stampingPolishedMat);
+                    fanPunch.position.set(0.15, 0, 0);
+                    punchFeatureGrp.add(fanPunch);
+
+                    for (let l = -0.3; l <= 0.3; l += 0.08) {
+                        const louver = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.02, 0.04), stampingPolishedMat);
+                        louver.position.set(-0.25, 0, l);
+                        punchFeatureGrp.add(louver);
+                    }
+
+                    punchFeatureGrp.position.set(0, punchYOffset - stampingUpperDieBlockH / 2 - punchH - 0.05, 0);
+                    punchGrp.add(punchFeatureGrp);
+                } else if (type === 'side_panel_ac') {
+                    const punchFeatureGrp = new THREE.Group();
+                    for (let l = -0.35; l <= 0.35; l += 0.08) {
+                        const louverLeft = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.02, 0.04), stampingPolishedMat);
+                        louverLeft.position.set(-0.2, 0, l);
+                        punchFeatureGrp.add(louverLeft);
+
+                        const louverRight = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.02, 0.04), stampingPolishedMat);
+                        louverRight.position.set(0.2, 0, l);
+                        punchFeatureGrp.add(louverRight);
+                    }
+                    punchFeatureGrp.position.set(0, punchYOffset - stampingUpperDieBlockH / 2 - punchH - 0.01, 0);
+                    punchGrp.add(punchFeatureGrp);
+                }
+
+                const shoulderY = punchYOffset - stampingUpperDieBlockH / 2 - 0.010;
+                const shoulderT = 0.055;
+                [
+                    { w: punchW, d: shoulderT, x: 0, z: -(cavD / 2 + 0.050) },
+                    { w: punchW, d: shoulderT, x: 0, z: (cavD / 2 + 0.050) },
+                    { w: shoulderT, d: punchD, x: -(cavW / 2 + 0.050), z: 0 },
+                    { w: shoulderT, d: punchD, x: (cavW / 2 + 0.050), z: 0 }
+                ].forEach(face => {
+                    const shoulder = new THREE.Mesh(new THREE.BoxGeometry(face.w, 0.020, face.d), stampingDieMat);
+                    shoulder.position.set(face.x, shoulderY, face.z);
+                    shoulder.castShadow = true;
+                    punchGrp.add(shoulder);
+                });
+                return punchGrp;
+            };
+
+            punchGroupBack.add(buildUpperPunch('back_panel'));
+            punchGroupFront.add(buildUpperPunch('front_panel_ac'));
+            punchGroupSide.add(buildUpperPunch('side_panel_ac'));
+
+            stampingRamGroup.add(punchGroupBack, punchGroupFront, punchGroupSide);
 
             grp.add(stampingRamGroup);
 
@@ -1342,25 +1454,25 @@ export default function DecoilerCanvas({
             const glassW = stampingBedDepth;
             const glassH = stampingColumnTopY - stampingBedTopY;
             const glassPanel = new THREE.Mesh(new THREE.BoxGeometry(glassW, glassH, 0.02), guardGlassMat);
-            glassPanel.position.set(0, stampingBedTopY + glassH/2, 0);
+            glassPanel.position.set(0, stampingBedTopY + glassH / 2, 0);
             leftGuard.add(glassPanel);
 
             const tFrame = new THREE.Mesh(new THREE.BoxGeometry(glassW, 0.04, 0.04), stampingYellowMat);
             tFrame.position.set(0, stampingBedTopY + glassH, 0);
             const bFrame = tFrame.clone(); bFrame.position.y = stampingBedTopY;
             const lFrame = new THREE.Mesh(new THREE.BoxGeometry(0.04, glassH, 0.04), stampingYellowMat);
-            lFrame.position.set(-glassW/2, stampingBedTopY + glassH/2, 0);
-            const rFrame = lFrame.clone(); rFrame.position.x = glassW/2;
+            lFrame.position.set(-glassW / 2, stampingBedTopY + glassH / 2, 0);
+            const rFrame = lFrame.clone(); rFrame.position.x = glassW / 2;
             leftGuard.add(tFrame, bFrame, lFrame, rFrame);
 
             leftGuard.rotation.y = Math.PI / 2;
             leftGuard.position.set(-stampingColumnX - 0.05, 0, stampingCenterZ);
-            
+
             leftGuard.visible = safeGuardVisible;
             if (frontGuardRef) frontGuardRef.current = leftGuard;
             grp.add(leftGuard);
 
-            return { grp, ramGroup: stampingRamGroup, sensorLens: sensorLensRef.current, updateRamSupports, alertGroup, alertTex };
+            return { grp, ramGroup: stampingRamGroup, sensorLens: sensorLensRef.current, updateRamSupports, alertGroup, alertTex, dieGroupBack, dieGroupFront, dieGroupSide, punchGroupBack, punchGroupFront, punchGroupSide };
         }
         const stampingPress = buildStampingPress();
         scene.add(stampingPress.grp);
@@ -1444,15 +1556,18 @@ export default function DecoilerCanvas({
         transferVerticalHandle.castShadow = true;
         transferVerticalAssembly.add(transferVerticalHandle);
 
+        const vacuumHeadGroup = new THREE.Group();
+        transferVerticalAssembly.add(vacuumHeadGroup);
+
         const transferVacuumConnector = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.10, 16), transferRailBracketMat);
         transferVacuumConnector.position.set(-1.6385, -transferVerticalHandleBaseLength - 0.05, 0);
         transferVacuumConnector.castShadow = true;
-        transferVerticalAssembly.add(transferVacuumConnector);
+        vacuumHeadGroup.add(transferVacuumConnector);
 
         const transferVacuumUpperBase = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.08, 0.36), transferRailBracketMat);
         transferVacuumUpperBase.position.set(-1.6385, -transferVerticalHandleBaseLength - 0.115, 0);
         transferVacuumUpperBase.castShadow = true;
-        transferVerticalAssembly.add(transferVacuumUpperBase);
+        vacuumHeadGroup.add(transferVacuumUpperBase);
 
         const transferVacuumFingerPositions = [
             [-1.7385, -0.255, -0.10],
@@ -1467,13 +1582,13 @@ export default function DecoilerCanvas({
             const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.12, 16), transferRailMat);
             finger.position.set(pos[0], -transferVerticalHandleBaseLength - 0.135, pos[2]);
             finger.castShadow = true;
-            transferVerticalAssembly.add(finger);
+            vacuumHeadGroup.add(finger);
             transferVacuumFingers.push(finger);
 
             const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.042, 0.045, 16), transferRailMat);
             cup.position.set(pos[0], -transferVerticalHandleBaseLength - 0.215, pos[2]);
             cup.castShadow = true;
-            transferVerticalAssembly.add(cup);
+            vacuumHeadGroup.add(cup);
             transferVacuumCups.push(cup);
         });
 
@@ -1489,15 +1604,8 @@ export default function DecoilerCanvas({
             transferVerticalHandle.position.y = -transferVerticalHandleLength / 2;
 
             const delta = transferVerticalHandleLength - transferVerticalHandleBaseLength;
-            transferVacuumConnector.position.y = -transferVerticalHandleBaseLength - 0.05 - delta;
-            transferVacuumUpperBase.position.y = -transferVerticalHandleBaseLength - 0.115 - delta;
+            vacuumHeadGroup.position.y = -delta;
 
-            transferVacuumFingers.forEach((finger) => {
-                finger.position.y = -transferVerticalHandleBaseLength - 0.135 - delta;
-            });
-            transferVacuumCups.forEach((cup) => {
-                cup.position.y = -transferVerticalHandleBaseLength - 0.215 - delta;
-            });
             transferVerticalAssembly.userData.gripY = transferRailY - delta - 0.3575;
         }
 
@@ -1530,208 +1638,208 @@ export default function DecoilerCanvas({
             const partsContainerGroup = new THREE.Group();
 
 
-        const standLegW = 0.12;
-        [-1, 1].forEach(sx => {
-            [-1, 1].forEach(sz => {
-                const legX = sx * (contW / 2 - standLegW / 2);
-                const legZ = sz * (contD / 2 - standLegW / 2);
+            const standLegW = 0.12;
+            [-1, 1].forEach(sx => {
+                [-1, 1].forEach(sz => {
+                    const legX = sx * (contW / 2 - standLegW / 2);
+                    const legZ = sz * (contD / 2 - standLegW / 2);
 
-                const footPlate = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.025, 0.24), containerDarkMat);
-                footPlate.position.set(legX, 0.0125, legZ);
-                footPlate.receiveShadow = true;
-                partsContainerGroup.add(footPlate);
+                    const footPlate = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.025, 0.24), containerDarkMat);
+                    footPlate.position.set(legX, 0.0125, legZ);
+                    footPlate.receiveShadow = true;
+                    partsContainerGroup.add(footPlate);
 
-                [-1, 1].forEach(bx => {
-                    [-1, 1].forEach(bz => {
-                        const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.035, 6), stampingPolishedMat);
-                        bolt.position.set(legX + bx * 0.08, 0.035, legZ + bz * 0.08);
-                        partsContainerGroup.add(bolt);
+                    [-1, 1].forEach(bx => {
+                        [-1, 1].forEach(bz => {
+                            const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.035, 6), stampingPolishedMat);
+                            bolt.position.set(legX + bx * 0.08, 0.035, legZ + bz * 0.08);
+                            partsContainerGroup.add(bolt);
+                        });
                     });
+
+                    const leg = new THREE.Mesh(new THREE.BoxGeometry(standLegW, standH, standLegW), containerStandMat);
+                    leg.position.set(legX, standH / 2, legZ);
+                    leg.castShadow = true; leg.receiveShadow = true;
+                    partsContainerGroup.add(leg);
+
+                    const legSleeve = new THREE.Mesh(new THREE.BoxGeometry(standLegW + 0.03, 0.22, standLegW + 0.03), containerYellowMat);
+                    legSleeve.position.set(legX, 0.11, legZ);
+                    partsContainerGroup.add(legSleeve);
+                });
+            });
+
+            [-1, 1].forEach(sz => {
+                const beamX = new THREE.Mesh(new THREE.BoxGeometry(contW, 0.10, standLegW), containerStandMat);
+                beamX.position.set(0, standH - 0.05, sz * (contD / 2 - standLegW / 2));
+                beamX.castShadow = true;
+                partsContainerGroup.add(beamX);
+            });
+            [-1, 1].forEach(sx => {
+                const beamZ = new THREE.Mesh(new THREE.BoxGeometry(standLegW, 0.10, contD - standLegW * 2), containerStandMat);
+                beamZ.position.set(sx * (contW / 2 - standLegW / 2), standH - 0.05, 0);
+                beamZ.castShadow = true;
+                partsContainerGroup.add(beamZ);
+            });
+
+            [-1, 1].forEach(sx => {
+                const brace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, contD - standLegW * 2), containerDarkMat);
+                brace.position.set(sx * (contW / 2 - standLegW / 2), standH * 0.45, 0);
+                partsContainerGroup.add(brace);
+            });
+            [-1, 1].forEach(sz => {
+                const brace = new THREE.Mesh(new THREE.BoxGeometry(contW - standLegW * 2, 0.06, 0.06), containerDarkMat);
+                brace.position.set(0, standH * 0.45, sz * (contD / 2 - standLegW / 2));
+                partsContainerGroup.add(brace);
+            });
+
+            const binBaseY = standH;
+            [-0.60, 0.60].forEach(zOffset => {
+                const forkPocket = new THREE.Mesh(new THREE.BoxGeometry(contW + 0.04, baseRunnerH, 0.28), containerDarkMat);
+                forkPocket.position.set(0, binBaseY + baseRunnerH / 2, zOffset);
+                forkPocket.castShadow = true; forkPocket.receiveShadow = true;
+                partsContainerGroup.add(forkPocket);
+
+                [-1, 1].forEach(xSign => {
+                    const tineHole = new THREE.Mesh(new THREE.BoxGeometry(0.02, baseRunnerH * 0.72, 0.22), stampingBlackMat);
+                    tineHole.position.set(xSign * (contW / 2 + 0.021), binBaseY + baseRunnerH / 2, zOffset);
+                    partsContainerGroup.add(tineHole);
+                });
+            });
+
+            [-contW / 2 + 0.08, 0, contW / 2 - 0.08].forEach(xOffset => {
+                const baseRunner = new THREE.Mesh(new THREE.BoxGeometry(0.14, baseRunnerH, contD), containerDarkMat);
+                baseRunner.position.set(xOffset, binBaseY + baseRunnerH / 2, 0);
+                baseRunner.castShadow = true; baseRunner.receiveShadow = true;
+                partsContainerGroup.add(baseRunner);
+            });
+
+            const contFloor = new THREE.Mesh(new THREE.BoxGeometry(contW, 0.04, contD), containerDarkMat);
+            contFloor.position.set(0, binBaseY + baseRunnerH + 0.02, 0);
+            contFloor.receiveShadow = true;
+            partsContainerGroup.add(contFloor);
+
+            [-0.9, -0.45, 0, 0.45, 0.9].forEach(xOff => {
+                const dunnageStrip = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.14, 0.03, contD - 0.16),
+                    new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.9 })
+                );
+                dunnageStrip.position.set(xOff, binBaseY + baseRunnerH + 0.04 + 0.015, 0);
+                dunnageStrip.receiveShadow = true;
+                partsContainerGroup.add(dunnageStrip);
+            });
+
+            const wallBaseY = binBaseY + baseRunnerH + 0.04;
+            const postH = contH;
+            const postSize = 0.11;
+
+            [-1, 1].forEach(sx => {
+                [-1, 1].forEach(sz => {
+                    const postX = sx * (contW / 2 - postSize / 2);
+                    const postZ = sz * (contD / 2 - postSize / 2);
+
+                    const post = new THREE.Mesh(new THREE.BoxGeometry(postSize, postH, postSize), containerDarkMat);
+                    post.position.set(postX, wallBaseY + postH / 2, postZ);
+                    post.castShadow = true; post.receiveShadow = true;
+                    partsContainerGroup.add(post);
+
+                    const stackEar = new THREE.Mesh(new THREE.BoxGeometry(postSize + 0.05, 0.10, postSize + 0.05), containerYellowMat);
+                    stackEar.position.set(postX, wallBaseY + postH + 0.05, postZ);
+                    stackEar.castShadow = true;
+                    partsContainerGroup.add(stackEar);
+
+                    const liftTab = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.08, 0.08), containerGalvMat);
+                    liftTab.position.set(postX + sx * 0.025, wallBaseY + postH + 0.11, postZ);
+                    partsContainerGroup.add(liftTab);
+
+                    const foot = new THREE.Mesh(new THREE.BoxGeometry(postSize + 0.04, baseRunnerH + 0.02, postSize + 0.04), containerDarkMat);
+                    foot.position.set(postX, binBaseY + (baseRunnerH + 0.02) / 2, postZ);
+                    foot.castShadow = true;
+                    partsContainerGroup.add(foot);
+                });
+            });
+
+            const wallThickness = 0.025;
+            [-1, 1].forEach(signX => {
+                const wallX = signX * (contW / 2 - wallThickness / 2);
+
+                const sideWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, postH, contD - postSize * 2), containerBlueMat);
+                sideWall.position.set(wallX, wallBaseY + postH / 2, 0);
+                sideWall.castShadow = true; sideWall.receiveShadow = true;
+                partsContainerGroup.add(sideWall);
+
+                [-0.38, -0.12, 0.12, 0.38].forEach(yOff => {
+                    const rib = new THREE.Mesh(new THREE.BoxGeometry(wallThickness + 0.035, 0.065, contD - postSize * 2 - 0.04), containerBlueMat);
+                    rib.position.set(wallX, wallBaseY + postH / 2 + yOff, 0);
+                    rib.castShadow = true;
+                    partsContainerGroup.add(rib);
                 });
 
-                const leg = new THREE.Mesh(new THREE.BoxGeometry(standLegW, standH, standLegW), containerStandMat);
-                leg.position.set(legX, standH / 2, legZ);
-                leg.castShadow = true; leg.receiveShadow = true;
-                partsContainerGroup.add(leg);
-
-                const legSleeve = new THREE.Mesh(new THREE.BoxGeometry(standLegW + 0.03, 0.22, standLegW + 0.03), containerYellowMat);
-                legSleeve.position.set(legX, 0.11, legZ);
-                partsContainerGroup.add(legSleeve);
+                const topRim = new THREE.Mesh(new THREE.BoxGeometry(postSize * 0.95, 0.065, contD - postSize * 2), containerRimMat);
+                topRim.position.set(wallX, wallBaseY + postH - 0.0325, 0);
+                topRim.castShadow = true;
+                partsContainerGroup.add(topRim);
             });
-        });
 
-        [-1, 1].forEach(sz => {
-            const beamX = new THREE.Mesh(new THREE.BoxGeometry(contW, 0.10, standLegW), containerStandMat);
-            beamX.position.set(0, standH - 0.05, sz * (contD / 2 - standLegW / 2));
-            beamX.castShadow = true;
-            partsContainerGroup.add(beamX);
-        });
-        [-1, 1].forEach(sx => {
-            const beamZ = new THREE.Mesh(new THREE.BoxGeometry(standLegW, 0.10, contD - standLegW * 2), containerStandMat);
-            beamZ.position.set(sx * (contW / 2 - standLegW / 2), standH - 0.05, 0);
-            beamZ.castShadow = true;
-            partsContainerGroup.add(beamZ);
-        });
-
-        [-1, 1].forEach(sx => {
-            const brace = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, contD - standLegW * 2), containerDarkMat);
-            brace.position.set(sx * (contW / 2 - standLegW / 2), standH * 0.45, 0);
-            partsContainerGroup.add(brace);
-        });
-        [-1, 1].forEach(sz => {
-            const brace = new THREE.Mesh(new THREE.BoxGeometry(contW - standLegW * 2, 0.06, 0.06), containerDarkMat);
-            brace.position.set(0, standH * 0.45, sz * (contD / 2 - standLegW / 2));
-            partsContainerGroup.add(brace);
-        });
-
-        const binBaseY = standH;
-        [-0.60, 0.60].forEach(zOffset => {
-            const forkPocket = new THREE.Mesh(new THREE.BoxGeometry(contW + 0.04, baseRunnerH, 0.28), containerDarkMat);
-            forkPocket.position.set(0, binBaseY + baseRunnerH / 2, zOffset);
-            forkPocket.castShadow = true; forkPocket.receiveShadow = true;
-            partsContainerGroup.add(forkPocket);
-
-            [-1, 1].forEach(xSign => {
-                const tineHole = new THREE.Mesh(new THREE.BoxGeometry(0.02, baseRunnerH * 0.72, 0.22), stampingBlackMat);
-                tineHole.position.set(xSign * (contW / 2 + 0.021), binBaseY + baseRunnerH / 2, zOffset);
-                partsContainerGroup.add(tineHole);
-            });
-        });
-
-        [-contW / 2 + 0.08, 0, contW / 2 - 0.08].forEach(xOffset => {
-            const baseRunner = new THREE.Mesh(new THREE.BoxGeometry(0.14, baseRunnerH, contD), containerDarkMat);
-            baseRunner.position.set(xOffset, binBaseY + baseRunnerH / 2, 0);
-            baseRunner.castShadow = true; baseRunner.receiveShadow = true;
-            partsContainerGroup.add(baseRunner);
-        });
-
-        const contFloor = new THREE.Mesh(new THREE.BoxGeometry(contW, 0.04, contD), containerDarkMat);
-        contFloor.position.set(0, binBaseY + baseRunnerH + 0.02, 0);
-        contFloor.receiveShadow = true;
-        partsContainerGroup.add(contFloor);
-
-        [-0.9, -0.45, 0, 0.45, 0.9].forEach(xOff => {
-            const dunnageStrip = new THREE.Mesh(
-                new THREE.BoxGeometry(0.14, 0.03, contD - 0.16),
-                new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.9 })
-            );
-            dunnageStrip.position.set(xOff, binBaseY + baseRunnerH + 0.04 + 0.015, 0);
-            dunnageStrip.receiveShadow = true;
-            partsContainerGroup.add(dunnageStrip);
-        });
-
-        const wallBaseY = binBaseY + baseRunnerH + 0.04;
-        const postH = contH;
-        const postSize = 0.11;
-
-        [-1, 1].forEach(sx => {
-            [-1, 1].forEach(sz => {
-                const postX = sx * (contW / 2 - postSize / 2);
-                const postZ = sz * (contD / 2 - postSize / 2);
-
-                const post = new THREE.Mesh(new THREE.BoxGeometry(postSize, postH, postSize), containerDarkMat);
-                post.position.set(postX, wallBaseY + postH / 2, postZ);
-                post.castShadow = true; post.receiveShadow = true;
-                partsContainerGroup.add(post);
-
-                const stackEar = new THREE.Mesh(new THREE.BoxGeometry(postSize + 0.05, 0.10, postSize + 0.05), containerYellowMat);
-                stackEar.position.set(postX, wallBaseY + postH + 0.05, postZ);
-                stackEar.castShadow = true;
-                partsContainerGroup.add(stackEar);
-
-                const liftTab = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.08, 0.08), containerGalvMat);
-                liftTab.position.set(postX + sx * 0.025, wallBaseY + postH + 0.11, postZ);
-                partsContainerGroup.add(liftTab);
-
-                const foot = new THREE.Mesh(new THREE.BoxGeometry(postSize + 0.04, baseRunnerH + 0.02, postSize + 0.04), containerDarkMat);
-                foot.position.set(postX, binBaseY + (baseRunnerH + 0.02) / 2, postZ);
-                foot.castShadow = true;
-                partsContainerGroup.add(foot);
-            });
-        });
-
-        const wallThickness = 0.025;
-        [-1, 1].forEach(signX => {
-            const wallX = signX * (contW / 2 - wallThickness / 2);
-
-            const sideWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, postH, contD - postSize * 2), containerBlueMat);
-            sideWall.position.set(wallX, wallBaseY + postH / 2, 0);
-            sideWall.castShadow = true; sideWall.receiveShadow = true;
-            partsContainerGroup.add(sideWall);
+            const rearWallZ = contD / 2 - wallThickness / 2;
+            const rearWall = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, postH, wallThickness), containerBlueMat);
+            rearWall.position.set(0, wallBaseY + postH / 2, rearWallZ);
+            rearWall.castShadow = true; rearWall.receiveShadow = true;
+            partsContainerGroup.add(rearWall);
 
             [-0.38, -0.12, 0.12, 0.38].forEach(yOff => {
-                const rib = new THREE.Mesh(new THREE.BoxGeometry(wallThickness + 0.035, 0.065, contD - postSize * 2 - 0.04), containerBlueMat);
-                rib.position.set(wallX, wallBaseY + postH / 2 + yOff, 0);
+                const rib = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2 - 0.04, 0.065, wallThickness + 0.035), containerBlueMat);
+                rib.position.set(0, wallBaseY + postH / 2 + yOff, rearWallZ);
                 rib.castShadow = true;
                 partsContainerGroup.add(rib);
             });
 
-            const topRim = new THREE.Mesh(new THREE.BoxGeometry(postSize * 0.95, 0.065, contD - postSize * 2), containerRimMat);
-            topRim.position.set(wallX, wallBaseY + postH - 0.0325, 0);
-            topRim.castShadow = true;
-            partsContainerGroup.add(topRim);
-        });
+            const rearTopRim = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, 0.065, postSize * 0.95), containerRimMat);
+            rearTopRim.position.set(0, wallBaseY + postH - 0.0325, rearWallZ);
+            rearTopRim.castShadow = true;
+            partsContainerGroup.add(rearTopRim);
 
-        const rearWallZ = contD / 2 - wallThickness / 2;
-        const rearWall = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, postH, wallThickness), containerBlueMat);
-        rearWall.position.set(0, wallBaseY + postH / 2, rearWallZ);
-        rearWall.castShadow = true; rearWall.receiveShadow = true;
-        partsContainerGroup.add(rearWall);
+            const frontWallZ = -contD / 2 + wallThickness / 2;
+            const frontWallH = 0.55;
+            const frontWall = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, frontWallH, wallThickness), containerBlueMat);
+            frontWall.position.set(0, wallBaseY + frontWallH / 2, frontWallZ);
+            frontWall.castShadow = true; frontWall.receiveShadow = true;
+            partsContainerGroup.add(frontWall);
 
-        [-0.38, -0.12, 0.12, 0.38].forEach(yOff => {
-            const rib = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2 - 0.04, 0.065, wallThickness + 0.035), containerBlueMat);
-            rib.position.set(0, wallBaseY + postH / 2 + yOff, rearWallZ);
-            rib.castShadow = true;
-            partsContainerGroup.add(rib);
-        });
+            [-0.14, 0.14].forEach(yOff => {
+                const rib = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2 - 0.04, 0.06, wallThickness + 0.035), containerBlueMat);
+                rib.position.set(0, wallBaseY + frontWallH / 2 + yOff, frontWallZ);
+                rib.castShadow = true;
+                partsContainerGroup.add(rib);
+            });
 
-        const rearTopRim = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, 0.065, postSize * 0.95), containerRimMat);
-        rearTopRim.position.set(0, wallBaseY + postH - 0.0325, rearWallZ);
-        rearTopRim.castShadow = true;
-        partsContainerGroup.add(rearTopRim);
+            const frontTopRim = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, 0.05, postSize * 0.95), containerRimMat);
+            frontTopRim.position.set(0, wallBaseY + frontWallH - 0.025, frontWallZ);
+            frontTopRim.castShadow = true;
+            partsContainerGroup.add(frontTopRim);
 
-        const frontWallZ = -contD / 2 + wallThickness / 2;
-        const frontWallH = 0.55;
-        const frontWall = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, frontWallH, wallThickness), containerBlueMat);
-        frontWall.position.set(0, wallBaseY + frontWallH / 2, frontWallZ);
-        frontWall.castShadow = true; frontWall.receiveShadow = true;
-        partsContainerGroup.add(frontWall);
+            const placard = new THREE.Mesh(new THREE.BoxGeometry(0.60, 0.30, 0.02), containerLabelMat);
+            placard.position.set(contW / 2 + 0.015, wallBaseY + postH * 0.65, 0);
+            partsContainerGroup.add(placard);
 
-        [-0.14, 0.14].forEach(yOff => {
-            const rib = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2 - 0.04, 0.06, wallThickness + 0.035), containerBlueMat);
-            rib.position.set(0, wallBaseY + frontWallH / 2 + yOff, frontWallZ);
-            rib.castShadow = true;
-            partsContainerGroup.add(rib);
-        });
+            const placardBorder = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.34, 0.01), containerDarkMat);
+            placardBorder.position.set(contW / 2 + 0.010, wallBaseY + postH * 0.65, 0);
+            partsContainerGroup.add(placardBorder);
 
-        const frontTopRim = new THREE.Mesh(new THREE.BoxGeometry(contW - postSize * 2, 0.05, postSize * 0.95), containerRimMat);
-        frontTopRim.position.set(0, wallBaseY + frontWallH - 0.025, frontWallZ);
-        frontTopRim.castShadow = true;
-        partsContainerGroup.add(frontTopRim);
+            const hazardPlate = new THREE.Mesh(
+                new THREE.PlaneGeometry(contW - 0.3, 0.09),
+                new THREE.MeshStandardMaterial({ map: hazardTex, roughness: 0.85 })
+            );
+            hazardPlate.position.set(0, binBaseY + baseRunnerH * 0.5, frontWallZ - 0.018);
+            partsContainerGroup.add(hazardPlate);
 
-        const placard = new THREE.Mesh(new THREE.BoxGeometry(0.60, 0.30, 0.02), containerLabelMat);
-        placard.position.set(contW / 2 + 0.015, wallBaseY + postH * 0.65, 0);
-        partsContainerGroup.add(placard);
+            const standHazard = hazardPlate.clone();
+            standHazard.position.set(0, standH * 0.5, frontWallZ - 0.018);
+            partsContainerGroup.add(standHazard);
 
-        const placardBorder = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.34, 0.01), containerDarkMat);
-        placardBorder.position.set(contW / 2 + 0.010, wallBaseY + postH * 0.65, 0);
-        partsContainerGroup.add(placardBorder);
-
-        const hazardPlate = new THREE.Mesh(
-            new THREE.PlaneGeometry(contW - 0.3, 0.09),
-            new THREE.MeshStandardMaterial({ map: hazardTex, roughness: 0.85 })
-        );
-        hazardPlate.position.set(0, binBaseY + baseRunnerH * 0.5, frontWallZ - 0.018);
-        partsContainerGroup.add(hazardPlate);
-
-        const standHazard = hazardPlate.clone();
-        standHazard.position.set(0, standH * 0.5, frontWallZ - 0.018);
-        partsContainerGroup.add(standHazard);
-
-        const rearHazardPlate = hazardPlate.clone();
-        rearHazardPlate.rotation.y = Math.PI;
-        rearHazardPlate.position.set(0, binBaseY + baseRunnerH * 0.5, rearWallZ + 0.018);
-        partsContainerGroup.add(rearHazardPlate);
+            const rearHazardPlate = hazardPlate.clone();
+            rearHazardPlate.rotation.y = Math.PI;
+            rearHazardPlate.position.set(0, binBaseY + baseRunnerH * 0.5, rearWallZ + 0.018);
+            partsContainerGroup.add(rearHazardPlate);
 
             return partsContainerGroup;
         }
@@ -1879,10 +1987,31 @@ export default function DecoilerCanvas({
         let exitTransferTimer = 0;
         let exitTransferSheet = null;
         let exitTransferCarriageZ = exitStandbyZ;
-        let exitContainerStackCount = 0;
-        let activeContainerIndex = 0;
-        let containerSwapState = 'IDLE'; // 'IDLE', 'SWAPPING'
-        let containerSwapProgress = 0;
+        const createInitialState = (modelId) => {
+            const pConfig = getPanelConfig(modelId);
+            const q = [];
+            for (let i = 1; i < pConfig.totalContainers; i++) q.push(i);
+            return {
+                totalProduced: 0,
+                totalPiecesCut: 0,
+                storedParts: 0,
+                activePhysicalIndex: 0,
+                exitContainerStackCount: 0,
+                fullStorage: [],
+                queue: q,
+                containerSwapState: 'IDLE',
+                containerSwapProgress: 0,
+                growingIndex: 0,
+                materialExhaustedAlertShown: false
+            };
+        };
+
+        const panelStates = {
+            back_panel: createInitialState('back_panel'),
+            front_panel_ac: createInitialState('front_panel_ac'),
+            side_panel_ac: createInitialState('side_panel_ac')
+        };
+        const getCurState = () => panelStates[selectedModelRef.current] || panelStates.back_panel;
 
         const exitPickupZ = stampingCenterZ;
         const exitPlaceZ = contCenterZ;
@@ -1900,12 +2029,25 @@ export default function DecoilerCanvas({
             const pos = sheet.geometry.attributes.position;
             const base = sheet.userData.formBasePositions;
             const t = THREE.MathUtils.clamp(progress, 0, 1);
-            const lipHeight = 0.06 * t;
+
+            let edgeStartX = 0.78, edgeStartZ = 0.78;
+            let targetHeight = 0.06;
+
+            const model = selectedModelRef.current;
+            if (model === 'front_panel_ac') {
+                edgeStartX = 0.60;
+                edgeStartZ = 0.85;
+                targetHeight = 0.085;
+            } else if (model === 'side_panel_ac') {
+                edgeStartX = 0.90;
+                edgeStartZ = 0.50;
+                targetHeight = 0.045;
+            }
+
+            const lipHeight = targetHeight * t;
 
             const localHalfX = coilWidth / 2;
             const localHalfZ = 0.5;
-            const edgeStartX = 0.78;
-            const edgeStartZ = 0.78;
 
             for (let i = 0; i < pos.count; i++) {
                 const x = base[i * 3];
@@ -1919,7 +2061,43 @@ export default function DecoilerCanvas({
                 const edgeZ = THREE.MathUtils.smoothstep(nz, edgeStartZ, 1.0);
                 const edgeFactor = Math.max(edgeX, edgeZ);
 
-                pos.setY(i, y + lipHeight * edgeFactor);
+                let newY = y + lipHeight * edgeFactor;
+
+                if (model === 'front_panel_ac') {
+                    sheet.material = cutToLength.frontPanelPieceMat;
+
+                    // Slightly off-center fan hole
+                    const holeX = 0.15;
+                    const holeZ = 0.0;
+                    const fanRadius = 0.22;
+                    const dist = Math.sqrt((x - holeX) * (x - holeX) + (z - holeZ) * (z - holeZ));
+
+                    if (dist > fanRadius && dist < fanRadius + 0.04) {
+                        // Sharp rim around the hole
+                        const depth = THREE.MathUtils.smoothstep(dist, fanRadius, fanRadius + 0.04);
+                        newY -= 0.03 * (1 - depth) * t;
+                    }
+
+                    // Louvers on the left side
+                    if (x < -0.15 && x > -0.40 && Math.abs(z) < 0.35) {
+                        const louverFreq = 40;
+                        newY += Math.sin(z * louverFreq) * 0.012 * t;
+                    }
+                } else if (model === 'side_panel_ac') {
+                    sheet.material = cutToLength.pieceMat;
+                    // Two precise columns of ventilation louvers matching the punch
+                    if (Math.abs(x) > 0.05 && Math.abs(x) < 0.35 && Math.abs(z) < 0.38) {
+                        const louverFreq = 78.54; // Aligns with 0.08 spacing on punch
+                        const louverShape = Math.sin(z * louverFreq);
+                        if (louverShape > 0) {
+                            newY += louverShape * 0.015 * t;
+                        }
+                    }
+                } else {
+                    sheet.material = cutToLength.pieceMat;
+                }
+
+                pos.setY(i, newY);
             }
             pos.needsUpdate = true;
             sheet.geometry.computeVertexNormals();
@@ -1962,15 +2140,15 @@ export default function DecoilerCanvas({
                     const t = Math.min(stampingTimer / 0.18, 1);
                     stampingPress.ramGroup.position.y = THREE.MathUtils.lerp(stampingRamDownY, stampingRamDownY - formingDepth, t);
                     stampingPress.updateRamSupports?.();
-                    updateStampedSheetForm(stampingReadySheet, t);
+
                     if (t >= 1) {
+                        updateStampedSheetForm(stampingReadySheet, 1);
                         stampingState = 'holding';
                         stampingTimer = 0;
                     }
                     break;
                 }
                 case 'holding':
-                    updateStampedSheetForm(stampingReadySheet, 1);
                     stampingTimer += dt;
                     if (stampingTimer >= 0.25) {
                         stampingState = 'ascending';
@@ -2005,8 +2183,9 @@ export default function DecoilerCanvas({
         }
 
         function updateExitVacuumTransfer(dt) {
+            const st = getCurState();
             exitTransferTimer += dt;
-            const stackHeightOffset = Math.min(exitContainerStackCount, 25) * 0.028;
+            const stackHeightOffset = Math.min(st.exitContainerStackCount, 25) * 0.028;
             const exitContainerDepositY = 1.35 + stackHeightOffset;
 
             switch (exitTransferState) {
@@ -2122,10 +2301,11 @@ export default function DecoilerCanvas({
                     if (exitTransferSheet) {
                         exitTransferSheet.userData.exitVacuumHeld = false;
                         exitTransferSheet.userData.inContainer = true;
-                        exitTransferSheet.userData.containerIndex = activeContainerIndex;
+                        exitTransferSheet.userData.containerIndex = st.activePhysicalIndex;
                         exitTransferSheet.userData.containerPlacedX = 0;
                         exitTransferSheet.position.set(0, exitContainerDepositY, exitPlaceZ);
-                        exitContainerStackCount++;
+                        st.exitContainerStackCount++;
+                        st.totalProduced++;
                         exitTransferSheet = null;
                     }
                     if (exitTransferTimer >= 0.04) {
@@ -2180,7 +2360,7 @@ export default function DecoilerCanvas({
         let lengthSinceCut = 0;
         let bladePhase = 'idle';
         let bladeTimer = 0;
-        const clock = new THREE.Clock();
+        let lastTime = performance.now();
 
         let vacuumTransferState = 'toPickup';
         let vacuumTransferTimer = 0;
@@ -2191,67 +2371,184 @@ export default function DecoilerCanvas({
         let lastReportTime = 0;
 
         function animate() {
+            const st = getCurState();
+            const pConfig = getPanelConfig(selectedModelRef.current);
+            if (emptyTriggerRef.current > lastEmptyTriggerRef.current) {
+                lastEmptyTriggerRef.current = emptyTriggerRef.current;
+                if (st.fullStorage.length > 0) {
+                    const emptiedIdx = st.fullStorage.pop(); // Remove the OLDEST full container
+                    st.queue.push(emptiedIdx); // Return to queue
+                    st.storedParts += pConfig.capacity;
+                    // Hide its parts
+                    cutToLength.pieces.forEach(p => {
+                        if (p.userData.inContainer && p.userData.containerIndex === emptiedIdx) {
+                            p.visible = false;
+                            p.userData.inContainer = false;
+                        }
+                    });
+                }
+            }
+
+            if (modelChangeTriggerRef.current > lastModelChangeTriggerRef.current) {
+                lastModelChangeTriggerRef.current = modelChangeTriggerRef.current;
+
+                // Reset machine state
+                const q = [];
+                for (let i = 1; i < pConfig.totalContainers; i++) q.push(i);
+                st.queue = q;
+                st.fullStorage = [];
+                st.activePhysicalIndex = 0;
+                st.totalProduced = 0;
+                st.totalPiecesCut = 0;
+                st.storedParts = 0;
+                st.exitContainerStackCount = 0;
+                st.containerSwapState = 'IDLE';
+                st.growingIndex = 0;
+                st.materialExhaustedAlertShown = false;
+
+                fedLength = 0;
+                lengthSinceCut = 0;
+                bladePhase = 'idle';
+                bladeTimer = 0;
+                stampingState = 'waiting';
+                stampingTimer = 0;
+                stampingMaterialPresent = false;
+
+                vacuumTransferState = 'toPickup';
+                vacuumTransferTimer = 0;
+                exitTransferState = 'waitDie';
+                exitTransferTimer = 0;
+
+                if (cutReadySheet) { cutReadySheet.userData.cutReady = false; cutReadySheet = null; }
+                if (vacuumTransferSheet) { vacuumTransferSheet.userData.vacuumHeld = false; vacuumTransferSheet = null; }
+                if (stampingReadySheet) { stampingReadySheet.userData.onLowerDie = false; stampingReadySheet = null; }
+                if (exitTransferSheet) { exitTransferSheet.userData.exitVacuumHeld = false; exitTransferSheet = null; }
+
+                cutToLength.pieces.forEach(p => {
+                    p.visible = false;
+                    p.userData.cutReady = false;
+                    p.userData.vacuumHeld = false;
+                    p.userData.onLowerDie = false;
+                    p.userData.formed = false;
+                    p.userData.readyForExit = false;
+                    p.userData.exitVacuumHeld = false;
+                    p.userData.inContainer = false;
+                    p.position.set(0, cutToLength.pieceCenterY, cutToLength.cutZ);
+                    const pos = p.geometry.attributes.position;
+                    const base = p.userData.formBasePositions;
+                    if (pos && base) {
+                        pos.array.set(base);
+                        pos.needsUpdate = true;
+                        p.geometry.computeVertexNormals();
+                    }
+                    p.material = cutToLength.pieceMat;
+                });
+
+                containers.forEach(c => c.position.x = 100); // Hide them initially until active
+            }
+
             animationFrameId = requestAnimationFrame(animate);
-            const baseDt = Math.min(clock.getDelta(), 0.05);
-            const timeScale = (speedRef.current > 0) ? (speedRef.current / 4.594) : 1;
+            const nowTime = performance.now();
+            const dtRaw = (nowTime - lastTime) / 1000;
+            lastTime = nowTime;
+
+            const baseDt = Math.min(dtRaw, 0.05);
+            const currentRPM = speedRef.current;
+            const timeScale = (currentRPM > 0) ? (currentRPM / 4.594) : 1;
             const dt = baseDt * timeScale;
 
-            // 10 containers full overall capacity check
-            if (activeContainerIndex >= 10) {
+            const currentModel = selectedModelRef.current;
+            stampingPress.dieGroupBack.visible = (!currentModel || currentModel === 'back_panel');
+            stampingPress.dieGroupFront.visible = (currentModel === 'front_panel_ac');
+            stampingPress.dieGroupSide.visible = (currentModel === 'side_panel_ac');
+
+            stampingPress.punchGroupBack.visible = (!currentModel || currentModel === 'back_panel');
+            stampingPress.punchGroupFront.visible = (currentModel === 'front_panel_ac');
+            stampingPress.punchGroupSide.visible = (currentModel === 'side_panel_ac');
+
+            const allFull = st.containerSwapState === 'WAITING_FOR_EMPTY';
+            if (allFull) {
                 stampingPress.alertGroup.visible = true;
                 stampingPress.alertTex.offset.x -= dt * 0.4;
             } else {
                 stampingPress.alertGroup.visible = false;
             }
 
-            if (playingRef.current && activeContainerIndex < 10) {
-                if (containerSwapState === 'IDLE') {
-                    if (exitContainerStackCount >= 23) {
-                        containerSwapState = 'SWAPPING';
-                        containerSwapProgress = 0;
+            // Apply static positions for any container NOT actively animating
+            if (st.containerSwapState === 'IDLE' || st.containerSwapState === 'WAITING_FOR_EMPTY') {
+                containers[st.activePhysicalIndex].position.set(contCenterX, 0, contCenterZ);
+                st.queue.forEach((qIdx, q) => {
+                    containers[qIdx].position.set(contCenterX - 3.2 * (q + 1), 0, contCenterZ);
+                });
+                st.fullStorage.forEach((fIdx, j) => {
+                    containers[fIdx].position.set(contCenterX + 3.2 * (j + 1), 0, contCenterZ + 2.0);
+                });
+                // Hide unused containers
+                containers.forEach((c, idx) => {
+                    if (idx !== st.activePhysicalIndex && !st.queue.includes(idx) && !st.fullStorage.includes(idx)) {
+                        c.position.set(100, 0, 100);
+                    }
+                });
+            }
+
+            if (playingRef.current) {
+                if (st.containerSwapState === 'IDLE') {
+                    if (st.exitContainerStackCount >= pConfig.capacity) {
+                        if (st.queue.length > 0) {
+                            st.containerSwapState = 'SWAPPING';
+                            st.containerSwapProgress = 0;
+                        } else {
+                            st.containerSwapState = 'WAITING_FOR_EMPTY';
+                        }
                     }
                 }
 
-                if (containerSwapState === 'SWAPPING') {
-                    containerSwapProgress += dt * 0.5; // 2 seconds to swap
-                    const t = THREE.MathUtils.clamp(containerSwapProgress, 0, 1);
-                    
-                    // Phase 1: 0-30% move Z backward, Phase 2: 30-100% move X right
-                    let zPhase = 0, xPhase = 0;
-                    if (t < 0.3) {
-                        zPhase = t / 0.3;
-                        xPhase = 0;
-                    } else {
-                        zPhase = 1;
-                        xPhase = (t - 0.3) / 0.7;
-                    }
-                    
+                if (st.containerSwapState === 'WAITING_FOR_EMPTY' && st.queue.length > 0) {
+                    st.containerSwapState = 'SWAPPING';
+                    st.containerSwapProgress = 0;
+                }
+
+                if (st.containerSwapState === 'SWAPPING') {
+                    st.containerSwapProgress += dt * 0.5; // 2 seconds to swap
+                    const t = THREE.MathUtils.clamp(st.containerSwapProgress, 0, 1);
+
+                    let zPhase = t < 0.3 ? t / 0.3 : 1;
+                    let xPhase = t < 0.3 ? 0 : (t - 0.3) / 0.7;
                     const easeZ = zPhase < 0.5 ? 2 * zPhase * zPhase : -1 + (4 - 2 * zPhase) * zPhase;
                     const easeX = xPhase < 0.5 ? 2 * xPhase * xPhase : -1 + (4 - 2 * xPhase) * xPhase;
 
-                    for (let i = 0; i < MAX_CONTAINERS; i++) {
-                        const container = containers[i];
-                        
-                        if (i < activeContainerIndex) {
-                            // Previously filled containers shift right together (discharge conveyor) to make room
-                            const startX = contCenterX + (3.2 * (activeContainerIndex - i));
-                            const targetX = contCenterX + (3.2 * (activeContainerIndex + 1 - i));
-                            container.position.x = THREE.MathUtils.lerp(startX, targetX, easeX);
-                            container.position.z = contCenterZ + 2.0;
-                        } else if (i === activeContainerIndex) {
-                            // Active container forms the L-shape: moves backward in Z, then right in X to the +3.2 spot
-                            const targetX = contCenterX + 3.2;
-                            container.position.x = THREE.MathUtils.lerp(contCenterX, targetX, easeX);
-                            container.position.z = contCenterZ + (2.0 * easeZ);
-                        } else if (i === activeContainerIndex + 1) {
-                            // Next empty container moves from its queue spot straight to the active spot
-                            const startEmptyX = contCenterX - (3.2 * i);
-                            container.position.x = THREE.MathUtils.lerp(startEmptyX, contCenterX, easeX);
-                            container.position.z = contCenterZ;
-                        } else {
-                            // Other empty containers stay in their queue spots
-                            container.position.x = contCenterX - (3.2 * i);
-                            container.position.z = contCenterZ;
+                    // 1. Move previously full containers
+                    for (let j = 0; j < st.fullStorage.length; j++) {
+                        const cIdx = st.fullStorage[j];
+                        const container = containers[cIdx];
+                        const startX = contCenterX + 3.2 * (j + 1);
+                        const targetX = contCenterX + 3.2 * (j + 2);
+                        container.position.x = THREE.MathUtils.lerp(startX, targetX, easeX);
+                        container.position.z = contCenterZ + 2.0;
+                    }
+
+                    // 2. Move the active container to storage
+                    const activeContainer = containers[st.activePhysicalIndex];
+                    const activeTargetX = contCenterX + 3.2;
+                    activeContainer.position.x = THREE.MathUtils.lerp(contCenterX, activeTargetX, easeX);
+                    activeContainer.position.z = contCenterZ + 2.0 * easeZ;
+
+                    // 3. Move the next empty container to active
+                    if (st.queue.length > 0) {
+                        const nextActiveIdx = st.queue[0];
+                        const nextContainer = containers[nextActiveIdx];
+                        const startEmptyX = contCenterX - 3.2;
+                        nextContainer.position.x = THREE.MathUtils.lerp(startEmptyX, contCenterX, easeX);
+                        nextContainer.position.z = contCenterZ;
+
+                        // 4. Shift the rest of the queue
+                        for (let q = 1; q < st.queue.length; q++) {
+                            const qIdx = st.queue[q];
+                            const qContainer = containers[qIdx];
+                            const startQx = contCenterX - 3.2 * (q + 1);
+                            const targetQx = contCenterX - 3.2 * q;
+                            qContainer.position.x = THREE.MathUtils.lerp(startQx, targetQx, easeX);
+                            qContainer.position.z = contCenterZ;
                         }
                     }
 
@@ -2261,440 +2558,484 @@ export default function DecoilerCanvas({
                             const container = containers[cIdx];
                             const startX = p.userData.containerPlacedX || 0;
                             // Offset piece relative to its container's current position
-                            p.position.x = startX + (container.position.x - contCenterX);
-                            p.position.z = container.position.z;
+                            if (cIdx === st.activePhysicalIndex) {
+                                p.position.x = startX + (activeContainer.position.x - contCenterX);
+                                p.position.z = activeContainer.position.z;
+                            } else if (st.fullStorage.includes(cIdx)) {
+                                const j = st.fullStorage.indexOf(cIdx);
+                                const baseContX = contCenterX + 3.2 * (j + 1);
+                                p.position.x = startX + (container.position.x - baseContX);
+                                p.position.z = container.position.z;
+                            }
                         }
                     });
 
                     if (t >= 1) {
-                        activeContainerIndex++;
-                        exitContainerStackCount = 0;
-                        containerSwapState = 'IDLE';
+                        st.fullStorage.unshift(st.activePhysicalIndex);
+                        st.activePhysicalIndex = st.queue.shift();
+                        st.exitContainerStackCount = 0;
+                        st.containerSwapState = 'IDLE';
                     }
                 }
 
-                if (containerSwapState === 'IDLE') {
-                const currentRPM = speedRef.current;
-                vacuumTransferTimer += dt;
+                if (st.containerSwapState === 'IDLE') {
+                    vacuumTransferTimer += dt;
 
-                const pickupZ = cutToLength.cutZ + cutToLength.cutLength / 2;
-                const placeZ = stampingCenterZ;
-                const pickupY = cutToLength.pieceCenterY;
-                const lowerDieY = stampingMaterialY + stripThickness / 2;
+                    const pickupZ = cutToLength.cutZ + pConfig.cutLength / 2;
+                    const placeZ = stampingCenterZ;
+                    const pickupY = cutToLength.pieceCenterY;
+                    const lowerDieY = stampingMaterialY + stripThickness / 2;
 
-                const gripX = -1.6385;
-                const gripRestY = transferRailY - 0.3575;
-                const gripPickupY = pickupY + stripThickness / 2;
-                const gripPlaceY = lowerDieY + stripThickness / 2;
+                    const gripX = -1.6385;
+                    const gripRestY = transferRailY - 0.3575;
+                    const gripPickupY = pickupY + stripThickness / 2;
+                    const gripPlaceY = lowerDieY + stripThickness / 2;
 
-                function attachSheetToVacuum(sheet) {
-                    if (!sheet || !sheet.visible) return;
-                    vacuumTransferSheet = sheet;
-                    sheet.userData.vacuumHeld = true;
-                    sheet.userData.vacuumOffsetY = gripPickupY - sheet.position.y;
-                }
-
-                function releaseSheetFromVacuum() {
-                    if (!vacuumTransferSheet) return;
-                    vacuumTransferSheet.userData.vacuumHeld = false;
-                    vacuumTransferSheet = null;
-                }
-
-                switch (vacuumTransferState) {
-                    case 'toPickup':
-                        transferHandleZ = THREE.MathUtils.lerp(
-                            transferHandleZ,
-                            pickupZ,
-                            Math.min(1, dt * 5.0)
-                        );
-                        transferHandleCarriage.position.z = transferHandleZ;
-                        setVacuumGripY(gripRestY);
-
-                        if (Math.abs(transferHandleZ - pickupZ) < 0.03) {
-                            transferHandleZ = pickupZ;
-                            transferHandleCarriage.position.z = pickupZ;
-                            if (cutReadySheet) {
-                                vacuumTransferTimer = 0;
-                                vacuumTransferState = 'lowerToPickup';
-                            }
-                        }
-                        break;
-
-                    case 'lowerToPickup':
-                        setVacuumGripY(
-                            THREE.MathUtils.lerp(
-                                gripRestY,
-                                gripPickupY,
-                                Math.min(1, vacuumTransferTimer / 0.08)
-                            )
-                        );
-
-                        if (vacuumTransferTimer >= 0.08) {
-                            const candidate = cutReadySheet &&
-                                cutReadySheet.visible &&
-                                !cutReadySheet.userData.vacuumHeld &&
-                                Math.abs(cutReadySheet.position.z - pickupZ) < 0.08
-                                ? cutReadySheet : null;
-
-                            if (candidate) {
-                                candidate.position.x = transferHandleCarriage.position.x + gripX;
-                                candidate.position.z = pickupZ;
-                                candidate.position.y = pickupY;
-                                attachSheetToVacuum(candidate);
-                                candidate.userData.cutReady = false;
-                                cutReadySheet = null;
-                                vacuumTransferTimer = 0;
-                                vacuumTransferState = 'gripped';
-                            }
-                        }
-                        break;
-
-                    case 'gripped':
-                        if (vacuumTransferSheet) {
-                            vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
-                            vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
-                            vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
-                        }
-
-                        if (vacuumTransferTimer >= 0.04) {
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'liftFromPickup';
-                        }
-                        break;
-
-                    case 'liftFromPickup':
-                        setVacuumGripY(
-                            THREE.MathUtils.lerp(
-                                gripPickupY,
-                                gripRestY,
-                                Math.min(1, vacuumTransferTimer / 0.08)
-                            )
-                        );
-
-                        if (vacuumTransferSheet) {
-                            vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
-                            vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
-                            vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
-                        }
-
-                        if (vacuumTransferTimer >= 0.08) {
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'carryToPress';
-                        }
-                        break;
-
-                    case 'carryToPress': {
-                        const dieOccupied = (stampingState !== 'waiting') ||
-                            (exitCarriage.position.z < exitStandbyZ - 0.15) ||
-                            cutToLength.pieces.some(p => p.visible && (p.userData.readyForExit || p.userData.onLowerDie));
-
-                        const targetEntryZ = dieOccupied ? (stampingCenterZ - 1.25) : placeZ;
-
-                        transferHandleZ = THREE.MathUtils.lerp(
-                            transferHandleZ,
-                            targetEntryZ,
-                            Math.min(1, dt * 10.0)
-                        );
-                        transferHandleCarriage.position.z = transferHandleZ;
-                        setVacuumGripY(gripRestY);
-
-                        if (vacuumTransferSheet) {
-                            vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
-                            vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
-                            vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
-                        }
-
-                        if (!dieOccupied && Math.abs(transferHandleZ - placeZ) < 0.03) {
-                            transferHandleZ = placeZ;
-                            transferHandleCarriage.position.z = placeZ;
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'lowerToDie';
-                        }
-                        break;
+                    function attachSheetToVacuum(sheet) {
+                        if (!sheet || !sheet.visible) return;
+                        vacuumTransferSheet = sheet;
+                        sheet.userData.vacuumHeld = true;
+                        sheet.userData.vacuumOffsetY = gripPickupY - sheet.position.y;
                     }
 
-                    case 'lowerToDie':
-                        setVacuumGripY(
-                            THREE.MathUtils.lerp(
-                                gripRestY,
-                                gripPlaceY,
-                                Math.min(1, vacuumTransferTimer / 0.08)
-                            )
-                        );
+                    function releaseSheetFromVacuum() {
+                        if (!vacuumTransferSheet) return;
+                        vacuumTransferSheet.userData.vacuumHeld = false;
+                        vacuumTransferSheet = null;
+                    }
 
-                        if (vacuumTransferSheet) {
-                            vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
-                            vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
-                            vacuumTransferSheet.position.y = lowerDieY + (getVacuumGripY() - gripPlaceY);
-                        }
+                    switch (vacuumTransferState) {
+                        case 'toPickup':
+                            transferHandleZ = THREE.MathUtils.lerp(
+                                transferHandleZ,
+                                pickupZ,
+                                Math.min(1, dt * 5.0)
+                            );
+                            transferHandleCarriage.position.z = transferHandleZ;
+                            setVacuumGripY(gripRestY);
 
-                        if (vacuumTransferTimer >= 0.08) {
+                            if (Math.abs(transferHandleZ - pickupZ) < 0.03) {
+                                transferHandleZ = pickupZ;
+                                transferHandleCarriage.position.z = pickupZ;
+                                if (cutReadySheet) {
+                                    vacuumTransferTimer = 0;
+                                    vacuumTransferState = 'lowerToPickup';
+                                }
+                            }
+                            break;
+
+                        case 'lowerToPickup':
+                            setVacuumGripY(
+                                THREE.MathUtils.lerp(
+                                    gripRestY,
+                                    gripPickupY,
+                                    Math.min(1, vacuumTransferTimer / 0.08)
+                                )
+                            );
+
+                            if (vacuumTransferTimer >= 0.08) {
+                                const candidate = cutReadySheet &&
+                                    cutReadySheet.visible &&
+                                    !cutReadySheet.userData.vacuumHeld &&
+                                    Math.abs(cutReadySheet.position.z - pickupZ) < 0.08
+                                    ? cutReadySheet : null;
+
+                                if (candidate) {
+                                    candidate.position.x = transferHandleCarriage.position.x + gripX;
+                                    candidate.position.z = pickupZ;
+                                    candidate.position.y = pickupY;
+                                    attachSheetToVacuum(candidate);
+                                    candidate.userData.cutReady = false;
+                                    cutReadySheet = null;
+                                    vacuumTransferTimer = 0;
+                                    vacuumTransferState = 'gripped';
+                                }
+                            }
+                            break;
+
+                        case 'gripped':
                             if (vacuumTransferSheet) {
-                                vacuumTransferSheet.position.set(0, lowerDieY, stampingCenterZ);
-                                stampingReadySheet = vacuumTransferSheet;
-                                vacuumTransferSheet.userData.onLowerDie = true;
+                                vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
+                                vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
+                                vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
                             }
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'release';
-                        }
-                        break;
 
-                    case 'release':
-                        releaseSheetFromVacuum();
-                        if (vacuumTransferTimer >= 0.04) {
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'liftAfterPlace';
-                        }
-                        break;
-
-                    case 'liftAfterPlace':
-                        setVacuumGripY(
-                            THREE.MathUtils.lerp(
-                                gripPlaceY,
-                                gripRestY,
-                                Math.min(1, vacuumTransferTimer / 0.08)
-                            )
-                        );
-
-                        if (!stampingMaterialPresent &&
-                            stampingState === 'waiting' &&
-                            stampingReadySheet &&
-                            stampingReadySheet.visible &&
-                            vacuumTransferTimer >= 0.04) {
-                            stampingMaterialPresent = true;
-                        }
-
-                        if (vacuumTransferTimer >= 0.08) {
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'returnToPickup';
-                        }
-                        break;
-
-                    case 'returnToPickup':
-                        transferHandleZ = THREE.MathUtils.lerp(
-                            transferHandleZ,
-                            pickupZ,
-                            Math.min(1, dt * 5.0)
-                        );
-                        transferHandleCarriage.position.z = transferHandleZ;
-                        setVacuumGripY(gripRestY);
-
-                        if (Math.abs(transferHandleZ - pickupZ) < 0.03) {
-                            transferHandleZ = pickupZ;
-                            transferHandleCarriage.position.z = pickupZ;
-                            vacuumTransferTimer = 0;
-                            vacuumTransferState = 'toPickup';
-                        }
-                        break;
-                }
-
-                if (vacuumTransferSheet && vacuumTransferSheet.userData.vacuumHeld) {
-                    vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
-                    vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
-                    if (vacuumTransferState !== 'lowerToDie') {
-                        vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
-                    }
-                }
-
-                const synchronizedRPM = currentRPM;
-                // Use base RPM for visual physics since dt is globally scaled
-                let omega = (4.594 * 2 * Math.PI) / 60;
-                let tangentialSpeed = omega * R;
-                
-                // Fast-forward initial threading animation by 5x
-                if (fedLength < curveLength) {
-                    omega *= 5;
-                    tangentialSpeed *= 5;
-                }
-
-                spinAngle -= omega * dt;
-                coilMesh.rotation.y = spinAngle;
-
-                fedLength = Math.min(curveLength, fedLength + tangentialSpeed * dt);
-                
-                // Dynamically shrink the coil as material is consumed (assuming 500m total length)
-                const totalCoilLength = 500.0;
-                const rInner = 0.15; // inner hole radius
-                const rOuter = 0.45; // initial outer radius
-                const initialArea = Math.PI * (rOuter * rOuter - rInner * rInner);
-                // Calculate how much material has been used globally across all cycles
-                // We estimate global consumption based on containerCount + current fedLength
-                const globalConsumedLength = (exitContainerStackCount * 1.3) + fedLength;
-                const remainingFraction = Math.max(0, 1.0 - (globalConsumedLength / totalCoilLength));
-                const currentArea = initialArea * remainingFraction;
-                const currentRadius = Math.sqrt((currentArea / Math.PI) + (rInner * rInner));
-                const coilScale = currentRadius / rOuter;
-                coilMesh.scale.set(coilScale, 1, coilScale);
-
-                // Dynamically update the strip geometry to stay attached to the shrinking coil
-                const dynamicPts = [];
-                const wrapDeg = [-42, -32, -22, -14, -7, -2, 0];
-                wrapDeg.forEach(d => {
-                    const a = THREE.MathUtils.degToRad(d);
-                    dynamicPts.push(new THREE.Vector3(
-                        0,
-                        coilCenter.y + currentRadius * Math.cos(a),
-                        coilCenter.z + currentRadius * Math.sin(a)
-                    ));
-                });
-                dynamicPts.push(new THREE.Vector3(0, 3.78, 0.74));
-                dynamicPts.push(new THREE.Vector3(0, 3.20, 1.48));
-                dynamicPts.push(new THREE.Vector3(0, 2.62, 2.21));
-                dynamicPts.push(new THREE.Vector3(0, 2.35, 3.85));
-                dynamicPts.push(new THREE.Vector3(0, 2.22, 4.25));
-                dynamicPts.push(new THREE.Vector3(0, 2.22, 7.6));
-                const dynamicCurve = new THREE.CatmullRomCurve3(dynamicPts, false, 'centripetal', 0.4);
-                const dynamicSpacedPoints = dynamicCurve.getSpacedPoints(maxSegments);
-                
-                const updateRibbon = (geo, yOffset) => {
-                    const positions = geo.attributes.position.array;
-                    for (let i = 0; i <= maxSegments; i++) {
-                        const p = dynamicSpacedPoints[i];
-                        const li = i * 2;
-                        positions[li * 3 + 1] = p.y + yOffset;
-                        positions[li * 3 + 2] = p.z;
-                        positions[(li + 1) * 3 + 1] = p.y + yOffset;
-                        positions[(li + 1) * 3 + 2] = p.z;
-                    }
-                    geo.attributes.position.needsUpdate = true;
-                    geo.computeVertexNormals(); // Recompute normals so lighting stays smooth
-                };
-                updateRibbon(ribbonTopGeo, 0);
-                updateRibbon(ribbonBottomGeo, -stripThickness);
-
-                scrollOffset += tangentialSpeed * dt;
-
-                const fedFraction = fedLength / curveLength;
-                const activeSegments = Math.max(1, Math.min(maxSegments, Math.floor(fedFraction * maxSegments)));
-                ribbonTopGeo.setDrawRange(0, activeSegments * 6);
-                ribbonBottomGeo.setDrawRange(0, activeSegments * 6);
-
-                const uvShift = -(scrollOffset / 1.1) % 1;
-                stripTexTop.offset.x = uvShift;
-                stripTexBottom.offset.x = uvShift;
-
-                const feedRollOmega = tangentialSpeed / servoFeeder.rollRadius;
-                servoFeeder.lowerRoll.rotateY(-feedRollOmega * dt);
-                servoFeeder.upperRoll.rotateY(feedRollOmega * dt);
-                servoFeeder.feederCoupling.rotateY(-feedRollOmega * dt);
-                servoFeeder.feederMotor.rotateY(-feedRollOmega * 3 * dt);
-                servoFeeder.guideIn.rotateY(feedRollOmega * dt);
-                servoFeeder.guideOut.rotateY(-feedRollOmega * dt);
-
-
-
-                const growing = cutToLength.pieces[cutToLength.growingIndex];
-                if (bladePhase === 'idle') {
-                    if (fedLength >= cutReachLength) {
-                        lengthSinceCut = Math.min(cutToLength.cutLength, lengthSinceCut + tangentialSpeed * dt);
-                    }
-                    const curLen = Math.max(lengthSinceCut, 0.001);
-                    growing.scale.z = curLen;
-                    growing.position.z = cutToLength.cutZ + curLen / 2;
-                    growing.visible = true;
-                    if (lengthSinceCut >= cutToLength.cutLength &&
-                        cutReadySheet === null &&
-                        vacuumTransferSheet === null) {
-                        bladePhase = 'descending';
-                        bladeTimer = 0;
-                    }
-                } else if (bladePhase === 'descending') {
-                    bladeTimer += dt;
-                    const t = Math.min(bladeTimer / 0.18, 1);
-                    cutToLength.bladeHolder.position.y = THREE.MathUtils.lerp(cutToLength.holderTravelTop, cutToLength.holderTravelBottom, t);
-                    if (t >= 1) {
-                        bladePhase = 'holding';
-                        bladeTimer = 0;
-                    }
-                } else if (bladePhase === 'holding') {
-                    bladeTimer += dt;
-                    if (bladeTimer >= 0.12) {
-                        let nextIndex = cutToLength.growingIndex;
-                        for (let step = 1; step <= cutToLength.pieces.length; step++) {
-                            const candidateIndex = (cutToLength.growingIndex + step) % cutToLength.pieces.length;
-                            const candidate = cutToLength.pieces[candidateIndex];
-                            if (!candidate.userData.onLowerDie && !candidate.userData.vacuumHeld && !candidate.userData.exitVacuumHeld && !candidate.userData.inContainer) {
-                                nextIndex = candidateIndex;
-                                break;
+                            if (vacuumTransferTimer >= 0.04) {
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'liftFromPickup';
                             }
+                            break;
+
+                        case 'liftFromPickup':
+                            setVacuumGripY(
+                                THREE.MathUtils.lerp(
+                                    gripPickupY,
+                                    gripRestY,
+                                    Math.min(1, vacuumTransferTimer / 0.08)
+                                )
+                            );
+
+                            if (vacuumTransferSheet) {
+                                vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
+                                vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
+                                vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
+                            }
+
+                            if (vacuumTransferTimer >= 0.08) {
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'carryToPress';
+                            }
+                            break;
+
+                        case 'carryToPress': {
+                            const dieOccupied = (stampingState !== 'waiting') ||
+                                (exitCarriage.position.z < exitStandbyZ - 0.15) ||
+                                cutToLength.pieces.some(p => p.visible && (p.userData.readyForExit || p.userData.onLowerDie));
+
+                            const targetEntryZ = dieOccupied ? (stampingCenterZ - 1.25) : placeZ;
+
+                            transferHandleZ = THREE.MathUtils.lerp(
+                                transferHandleZ,
+                                targetEntryZ,
+                                Math.min(1, dt * 10.0)
+                            );
+                            transferHandleCarriage.position.z = transferHandleZ;
+                            setVacuumGripY(gripRestY);
+
+                            if (vacuumTransferSheet) {
+                                vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
+                                vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
+                                vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
+                            }
+
+                            if (!dieOccupied && Math.abs(transferHandleZ - placeZ) < 0.03) {
+                                transferHandleZ = placeZ;
+                                transferHandleCarriage.position.z = placeZ;
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'lowerToDie';
+                            }
+                            break;
                         }
-                        if (nextIndex === cutToLength.growingIndex) {
+
+                        case 'lowerToDie':
+                            setVacuumGripY(
+                                THREE.MathUtils.lerp(
+                                    gripRestY,
+                                    gripPlaceY,
+                                    Math.min(1, vacuumTransferTimer / 0.08)
+                                )
+                            );
+
+                            if (vacuumTransferSheet) {
+                                vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
+                                vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
+                                vacuumTransferSheet.position.y = lowerDieY + (getVacuumGripY() - gripPlaceY);
+                            }
+
+                            if (vacuumTransferTimer >= 0.08) {
+                                if (vacuumTransferSheet) {
+                                    vacuumTransferSheet.position.set(0, lowerDieY, stampingCenterZ);
+                                    stampingReadySheet = vacuumTransferSheet;
+                                    vacuumTransferSheet.userData.onLowerDie = true;
+                                }
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'release';
+                            }
+                            break;
+
+                        case 'release':
+                            releaseSheetFromVacuum();
+                            if (vacuumTransferTimer >= 0.04) {
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'liftAfterPlace';
+                            }
+                            break;
+
+                        case 'liftAfterPlace':
+                            setVacuumGripY(
+                                THREE.MathUtils.lerp(
+                                    gripPlaceY,
+                                    gripRestY,
+                                    Math.min(1, vacuumTransferTimer / 0.08)
+                                )
+                            );
+
+                            if (!stampingMaterialPresent &&
+                                stampingState === 'waiting' &&
+                                stampingReadySheet &&
+                                stampingReadySheet.visible &&
+                                vacuumTransferTimer >= 0.04) {
+                                stampingMaterialPresent = true;
+                            }
+
+                            if (vacuumTransferTimer >= 0.08) {
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'returnToPickup';
+                            }
+                            break;
+
+                        case 'returnToPickup':
+                            transferHandleZ = THREE.MathUtils.lerp(
+                                transferHandleZ,
+                                pickupZ,
+                                Math.min(1, dt * 5.0)
+                            );
+                            transferHandleCarriage.position.z = transferHandleZ;
+                            setVacuumGripY(gripRestY);
+
+                            if (Math.abs(transferHandleZ - pickupZ) < 0.03) {
+                                transferHandleZ = pickupZ;
+                                transferHandleCarriage.position.z = pickupZ;
+                                vacuumTransferTimer = 0;
+                                vacuumTransferState = 'toPickup';
+                            }
+                            break;
+                    }
+
+                    if (vacuumTransferSheet && vacuumTransferSheet.userData.vacuumHeld) {
+                        vacuumTransferSheet.position.x = transferHandleCarriage.position.x + gripX;
+                        vacuumTransferSheet.position.z = transferHandleCarriage.position.z;
+                        if (vacuumTransferState !== 'lowerToDie') {
+                            vacuumTransferSheet.position.y = pickupY + (getVacuumGripY() - gripPickupY);
+                        }
+                    }
+
+                    // Use base RPM for visual physics since dt is globally scaled
+                    let omega = (4.594 * 2 * Math.PI) / 60;
+                    let tangentialSpeed = omega * R;
+
+                    const feedingPaused = (lengthSinceCut >= pConfig.cutLength) || (bladePhase !== 'idle') || st.materialExhaustedAlertShown;
+                    if (feedingPaused && fedLength >= curveLength) {
+                        omega = 0;
+                        tangentialSpeed = 0;
+                    }
+
+                    // Fast-forward initial threading animation by 5x
+                    if (fedLength < curveLength) {
+                        omega *= 5;
+                        tangentialSpeed *= 5;
+                    }
+
+                    spinAngle -= omega * dt;
+                    coilMesh.rotation.y = spinAngle;
+
+                    fedLength = Math.min(curveLength, fedLength + tangentialSpeed * dt);
+
+                    // Dynamically shrink the coil as material is consumed (assuming 500m total length)
+                    const totalCoilLength = 500.0;
+                    const rInner = 0.15; // inner hole radius
+                    const rOuter = 0.45; // initial outer radius
+                    const initialArea = Math.PI * (rOuter * rOuter - rInner * rInner);
+                    // Calculate how much material has been used globally across all cycles
+                    const globalConsumedLength = (st.totalPiecesCut * pConfig.cutLength) + fedLength + lengthSinceCut;
+                    const remainingMaterial = Math.max(0, 500.0 - globalConsumedLength);
+
+                    if (remainingMaterial < pConfig.cutLength && !st.materialExhaustedAlertShown) {
+                        st.materialExhaustedAlertShown = true;
+                        if (typeof window !== 'undefined' && window.onMaterialExhaustedEvent) {
+                            window.onMaterialExhaustedEvent();
+                        }
+                    }
+
+                    const remainingFraction = Math.max(0, remainingMaterial / totalCoilLength);
+                    const currentArea = initialArea * remainingFraction;
+                    const currentRadius = Math.sqrt((currentArea / Math.PI) + (rInner * rInner));
+                    const coilScale = currentRadius / rOuter;
+                    coilMesh.scale.set(coilScale, 1, coilScale);
+
+                    // Dynamically update the strip geometry to stay attached to the shrinking coil
+                    const dynamicPts = [];
+                    const wrapDeg = [-42, -32, -22, -14, -7, -2, 0];
+                    wrapDeg.forEach(d => {
+                        const a = THREE.MathUtils.degToRad(d);
+                        dynamicPts.push(new THREE.Vector3(
+                            0,
+                            coilCenter.y + currentRadius * Math.cos(a),
+                            coilCenter.z + currentRadius * Math.sin(a)
+                        ));
+                    });
+                    dynamicPts.push(new THREE.Vector3(0, 3.78, 0.74));
+                    dynamicPts.push(new THREE.Vector3(0, 3.20, 1.48));
+                    dynamicPts.push(new THREE.Vector3(0, 2.62, 2.21));
+                    dynamicPts.push(new THREE.Vector3(0, 2.35, 3.85));
+                    dynamicPts.push(new THREE.Vector3(0, 2.22, 4.25));
+                    dynamicPts.push(new THREE.Vector3(0, 2.22, 7.6));
+                    const dynamicCurve = new THREE.CatmullRomCurve3(dynamicPts, false, 'centripetal', 0.4);
+                    const dynamicSpacedPoints = dynamicCurve.getSpacedPoints(maxSegments);
+
+                    const updateRibbon = (geo, yOffset) => {
+                        const positions = geo.attributes.position.array;
+                        for (let i = 0; i <= maxSegments; i++) {
+                            const p = dynamicSpacedPoints[i];
+                            const li = i * 2;
+                            positions[li * 3 + 1] = p.y + yOffset;
+                            positions[li * 3 + 2] = p.z;
+                            positions[(li + 1) * 3 + 1] = p.y + yOffset;
+                            positions[(li + 1) * 3 + 2] = p.z;
+                        }
+                        geo.attributes.position.needsUpdate = true;
+                        geo.computeVertexNormals(); // Recompute normals so lighting stays smooth
+                    };
+                    updateRibbon(ribbonTopGeo, 0);
+                    updateRibbon(ribbonBottomGeo, -stripThickness);
+
+                    scrollOffset += tangentialSpeed * dt;
+
+                    const fedFraction = fedLength / curveLength;
+                    const activeSegments = Math.max(1, Math.min(maxSegments, Math.floor(fedFraction * maxSegments)));
+                    ribbonTopGeo.setDrawRange(0, activeSegments * 6);
+                    ribbonBottomGeo.setDrawRange(0, activeSegments * 6);
+
+                    const uvShift = -(scrollOffset / 1.1) % 1;
+                    stripTexTop.offset.x = uvShift;
+                    stripTexBottom.offset.x = uvShift;
+
+                    const feedRollOmega = tangentialSpeed / servoFeeder.rollRadius;
+                    servoFeeder.lowerRoll.rotateY(-feedRollOmega * dt);
+                    servoFeeder.upperRoll.rotateY(feedRollOmega * dt);
+                    servoFeeder.feederCoupling.rotateY(-feedRollOmega * dt);
+                    servoFeeder.feederMotor.rotateY(-feedRollOmega * 3 * dt);
+                    servoFeeder.guideIn.rotateY(feedRollOmega * dt);
+                    servoFeeder.guideOut.rotateY(-feedRollOmega * dt);
+
+
+
+                    const growing = cutToLength.pieces[st.growingIndex];
+                    if (bladePhase === 'idle') {
+                        if (fedLength >= cutReachLength) {
+                            lengthSinceCut = Math.min(pConfig.cutLength, lengthSinceCut + tangentialSpeed * dt);
+                        }
+                        const curLen = Math.max(lengthSinceCut, 0.001);
+                        growing.scale.z = curLen;
+                        growing.position.z = cutToLength.cutZ + curLen / 2;
+                        growing.visible = true;
+                        if (lengthSinceCut >= pConfig.cutLength &&
+                            cutReadySheet === null &&
+                            vacuumTransferSheet === null) {
+                            bladePhase = 'descending';
+                            bladeTimer = 0;
+                        }
+                    } else if (bladePhase === 'descending') {
+                        bladeTimer += dt;
+                        const t = Math.min(bladeTimer / 0.18, 1);
+                        cutToLength.bladeHolder.position.y = THREE.MathUtils.lerp(cutToLength.holderTravelTop, cutToLength.holderTravelBottom, t);
+                        if (t >= 1) {
+                            bladePhase = 'holding';
+                            bladeTimer = 0;
+                        }
+                    } else if (bladePhase === 'holding') {
+                        bladeTimer += dt;
+                        if (bladeTimer >= 0.12) {
+                            let nextIndex = st.growingIndex;
                             for (let step = 1; step <= cutToLength.pieces.length; step++) {
-                                const candidateIndex = (cutToLength.growingIndex + step) % cutToLength.pieces.length;
+                                const candidateIndex = (st.growingIndex + step) % cutToLength.pieces.length;
                                 const candidate = cutToLength.pieces[candidateIndex];
-                                if (!candidate.userData.onLowerDie && !candidate.userData.vacuumHeld && !candidate.userData.exitVacuumHeld) {
+                                if (!candidate.userData.onLowerDie && !candidate.userData.vacuumHeld && !candidate.userData.exitVacuumHeld && !candidate.userData.inContainer) {
                                     nextIndex = candidateIndex;
                                     break;
                                 }
                             }
-                        }
-                        if (nextIndex !== cutToLength.growingIndex ||
-                            (!cutToLength.pieces[nextIndex].userData.onLowerDie && !cutToLength.pieces[nextIndex].userData.vacuumHeld && !cutToLength.pieces[nextIndex].userData.exitVacuumHeld)) {
-                            const finishedSheet = cutToLength.pieces[cutToLength.growingIndex];
-                            finishedSheet.userData.cutReady = true;
-                            finishedSheet.userData.onLowerDie = false;
-                            finishedSheet.userData.vacuumHeld = false;
-                            finishedSheet.userData.exitVacuumHeld = false;
-                            finishedSheet.userData.inContainer = false;
-                            cutReadySheet = finishedSheet;
-
-                            cutToLength.growingIndex = nextIndex;
-                            const next = cutToLength.pieces[cutToLength.growingIndex];
-                            const pos = next.geometry.attributes.position;
-                            const base = next.userData.formBasePositions;
-                            if (pos && base) {
-                                pos.array.set(base);
-                                pos.needsUpdate = true;
-                                next.geometry.computeVertexNormals();
+                            if (nextIndex === st.growingIndex) {
+                                for (let step = 1; step <= cutToLength.pieces.length; step++) {
+                                    const candidateIndex = (st.growingIndex + step) % cutToLength.pieces.length;
+                                    const candidate = cutToLength.pieces[candidateIndex];
+                                    if (!candidate.userData.onLowerDie && !candidate.userData.vacuumHeld && !candidate.userData.exitVacuumHeld) {
+                                        nextIndex = candidateIndex;
+                                        break;
+                                    }
+                                }
                             }
-                            next.userData.onLowerDie = false;
-                            next.userData.vacuumHeld = false;
-                            next.userData.exitVacuumHeld = false;
-                            next.userData.inContainer = false;
-                            next.userData.cutReady = false;
-                            next.scale.z = 0.001;
-                            next.position.set(0, cutToLength.pieceCenterY, cutToLength.cutZ);
-                            next.visible = true;
-                            lengthSinceCut = 0;
-                        }
-                        bladePhase = 'ascending';
-                        bladeTimer = 0;
-                    }
-                } else if (bladePhase === 'ascending') {
-                    bladeTimer += dt;
-                    const t = Math.min(bladeTimer / 0.22, 1);
-                    cutToLength.bladeHolder.position.y = THREE.MathUtils.lerp(cutToLength.holderTravelBottom, cutToLength.holderTravelTop, t);
-                    if (t >= 1) {
-                        bladePhase = 'idle';
-                        bladeTimer = 0;
-                    }
-                }
+                            if (nextIndex !== st.growingIndex ||
+                                (!cutToLength.pieces[nextIndex].userData.onLowerDie && !cutToLength.pieces[nextIndex].userData.vacuumHeld && !cutToLength.pieces[nextIndex].userData.exitVacuumHeld)) {
+                                const finishedSheet = cutToLength.pieces[st.growingIndex];
+                                finishedSheet.userData.cutReady = true;
+                                finishedSheet.userData.onLowerDie = false;
+                                finishedSheet.userData.vacuumHeld = false;
+                                finishedSheet.userData.exitVacuumHeld = false;
+                                finishedSheet.userData.inContainer = false;
+                                cutReadySheet = finishedSheet;
+                                st.totalPiecesCut++;
 
-                cutToLength.pieces.forEach((mesh, idx) => {
-                    if (idx === cutToLength.growingIndex || !mesh.visible) return;
-                    if (mesh.userData.vacuumHeld || mesh.userData.onLowerDie || mesh.userData.cutReady || mesh.userData.exitVacuumHeld || mesh.userData.inContainer) return;
-                    mesh.position.z += tangentialSpeed * dt;
-                    if (mesh.position.z - mesh.scale.z / 2 > cutToLength.exitLimitZ) {
-                        mesh.visible = false;
+                                st.growingIndex = nextIndex;
+                                const next = cutToLength.pieces[st.growingIndex];
+                                const pos = next.geometry.attributes.position;
+                                const base = next.userData.formBasePositions;
+                                if (pos && base) {
+                                    pos.array.set(base);
+                                    pos.needsUpdate = true;
+                                    next.geometry.computeVertexNormals();
+                                }
+                                next.material = cutToLength.pieceMat;
+                                next.userData.onLowerDie = false;
+                                next.userData.vacuumHeld = false;
+                                next.userData.exitVacuumHeld = false;
+                                next.userData.inContainer = false;
+                                next.userData.cutReady = false;
+                                next.userData.formed = false;
+                                next.scale.z = 0.001;
+                                next.position.set(0, cutToLength.pieceCenterY, cutToLength.cutZ);
+                                next.visible = true;
+                                lengthSinceCut = 0;
+                            }
+                            bladePhase = 'ascending';
+                            bladeTimer = 0;
+                        }
+                    } else if (bladePhase === 'ascending') {
+                        bladeTimer += dt;
+                        const t = Math.min(bladeTimer / 0.22, 1);
+                        cutToLength.bladeHolder.position.y = THREE.MathUtils.lerp(cutToLength.holderTravelBottom, cutToLength.holderTravelTop, t);
+                        if (t >= 1) {
+                            bladePhase = 'idle';
+                            bladeTimer = 0;
+                        }
+                    }
+
+                    cutToLength.pieces.forEach((mesh, idx) => {
+                        if (idx === st.growingIndex || !mesh.visible) return;
+                        if (mesh.userData.vacuumHeld || mesh.userData.onLowerDie || mesh.userData.cutReady || mesh.userData.exitVacuumHeld || mesh.userData.inContainer) return;
+                        mesh.position.z += tangentialSpeed * dt;
+                        if (mesh.position.z - mesh.scale.z / 2 > cutToLength.exitLimitZ) {
+                            mesh.visible = false;
+                        }
+                    });
+
+                    updateStampingPress(dt);
+                    updateExitVacuumTransfer(dt);
+                } // End of IDLE state block
+            } // End of playing && < 10 block
+
+            const now = performance.now();
+            if (now - lastReportTime > 80 && onStatsUpdate) {
+                lastReportTime = now;
+                const totalProduced = st.totalProduced;
+                const status = st.containerSwapState === 'WAITING_FOR_EMPTY'
+                    ? 'CONTAINERS FULL'
+                    : (!playingRef.current
+                        ? 'STOPPED'
+                        : (st.containerSwapState === 'SWAPPING' ? 'SWAPPING' : stampingState.toUpperCase()));
+
+                const pendingParts = totalProduced - st.storedParts;
+                const isActiveFull = st.exitContainerStackCount >= pConfig.capacity ? 1 : 0;
+                const fullContainersCount = st.fullStorage.length + isActiveFull;
+
+                onStatsUpdate({
+                    rpm: playingRef.current ? currentRPM : 0,
+                    feedRate: playingRef.current ? currentRPM * 2.827433 : 0,
+                    pressStatus: status,
+                    containerCount: totalProduced,
+                    dashboardStats: {
+                        totalContainers: pConfig.totalContainers,
+                        fullContainers: fullContainersCount,
+                        availableContainers: st.queue.length + 1,
+                        containerCapacity: pConfig.capacity,
+                        storedParts: st.storedParts,
+                        pendingParts: pendingParts,
+                        remainingStorageCapacity: ((st.queue.length + 1) * pConfig.capacity) - st.exitContainerStackCount,
+                        estimatedAdditional: Math.floor(Math.max(0, 500.0 - ((st.totalPiecesCut * pConfig.cutLength) + fedLength + lengthSinceCut)) / pConfig.cutLength),
+                        potentialTotalOutput: st.totalProduced + Math.floor(Math.max(0, 500.0 - ((st.totalPiecesCut * pConfig.cutLength) + fedLength + lengthSinceCut)) / pConfig.cutLength)
                     }
                 });
-
-                updateStampingPress(dt);
-                updateExitVacuumTransfer(dt);
-
-                const now = performance.now();
-                if (now - lastReportTime > 80 && onStatsUpdate) {
-                    lastReportTime = now;
-                    const totalProduced = (activeContainerIndex * 23) + exitContainerStackCount;
-                    onStatsUpdate({
-                        rpm: currentRPM,
-                        feedRate: ((currentRPM * 2 * Math.PI) / 60) * R * 60,
-                        pressStatus: containerSwapState === 'SWAPPING' ? 'SWAPPING' : stampingState.toUpperCase(),
-                        containerCount: totalProduced
-                    });
-                }
-            } // End of IDLE state block
-            } // End of playing && < 10 block
+            }
 
             renderer.render(scene, camera);
         }
